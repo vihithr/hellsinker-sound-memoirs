@@ -1,0 +1,18 @@
+# normalize text files, keep binaries untouched
+* text=auto
+
+*.c    text eol=lf
+*.cpp  text eol=lf
+*.h    text eol=lf
+*.py   text eol=lf
+*.md   text eol=lf
+*.rc   text eol=lf
+*.txt  text eol=lf
+
+# batch files must keep CRLF
+*.bat  text eol=crlf
+
+*.bmp  binary
+*.png  binary
+*.otf  binary
+*.ttf  binary

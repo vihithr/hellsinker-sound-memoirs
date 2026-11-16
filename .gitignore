@@ -1,0 +1,22 @@
+# build output
+obj/
+dist/
+*.obj
+*.o
+*.res
+*.exe
+
+# runtime config (per-user, contains local game path)
+hsbgm.ini
+
+# generated extras (only cells_<i>.bmp is embedded by src/memoirs.rc)
+assets/themed/title_*.bmp
+assets/themed/axis_*.bmp
+
+# python
+__pycache__/
+*.pyc
+
+# os
+Thumbs.db
+.DS_Store
