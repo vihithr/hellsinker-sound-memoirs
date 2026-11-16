@@ -1,10 +1,9 @@
-// ui.cpp - HellSinker "SOUND MEMOIRS" screen, reimplemented from the
-// decompiled original (sub_7EEAD8 / sub_518BA8 / sub_5193E8) at 640x480
-// logical resolution, rendered at 2x (1280x960).
+// ui.cpp - HellSinker "SOUND MEMOIRS" screen, reimplemented to match the
+// original at 640x480 logical resolution, rendered at 2x (1280x960).
 //
-// Reference: handoff/sound-memoirs/notes/params_reverse_engineered.md and
-// notes/decompiled/ui_sound_memoirs.c.  See notes/ui_algorithm_impl.md for
-// the mapping "decompiled block -> function here".
+// Layout, palette indices, glyph metrics and the per-frame animation timings
+// were recovered by measuring the original screen; the tuning values sit
+// inline next to the drawing code that consumes them.
 #include "ui.h"
 
 #include <mmsystem.h>
@@ -51,7 +50,7 @@ const int kHintX = 144, kHintY = 472;
 
 // ---- themes -------------------------------------------------------------
 // Screen RGB sampled from game frames for the "Original" preset; the packed
-// draw colors are recorded in notes/ui_algorithm.md (texture-modulated).
+// draw colors are texture-modulated on top of it.
 // Additional presets recolor the whole vector scene; text is drawn with the
 // private Hellsinker TTF so every element stays crisp at any scale.
 struct Theme {

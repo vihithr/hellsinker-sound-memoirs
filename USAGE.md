@@ -118,14 +118,16 @@ hsbgm.exe --audiotest <曲名> [秒]  播放并检测循环
 hsbgm.exe --help              帮助
 ```
 
-## 9. 自测 / 验收工具（可选，需 Python + PIL）
+## 9. 重新生成界面资源（可选，需 Python + PIL）
+
+界面图集与标题 run 表是构建输入，已随仓库提供；只有改动配色映射或想调整字格时才需要重生成：
 
 ```
-python tools\e2e_local.py        本地 WAV/MP3 端到端（打开/响应/停止/循环）
-python tools\verify_visual.py    主题/缩放/选中闪烁/右下无黑块 截图验收
-python tools\gui_smoke.py dist\hsbgm.exe out   12 张操作截图
+python tools\make_themed_art.py    重映射出 assets/themed/cells_<i>.bmp（四套主题）
+python tools\make_art_runs.py      由 assets/memoirs-title.bmp 生成 src/themed_art_runs.h
 ```
-对照基准在 `reference/`（原版截图），验收输出在 `verify/`。
+
+生成后要重新运行 `build.bat` —— 图集是通过 `src/memoirs.rc` 内嵌进 exe 的。
 
 ## 10. 常见问题
 
@@ -136,17 +138,17 @@ python tools\gui_smoke.py dist\hsbgm.exe out   12 张操作截图
 | 没有声音 | 检查系统音量/输出设备；播放器音量用 +/- 调 |
 | 画面"糊" | 本版本为清晰绘制/最近邻，不应糊；若糊请确认用的是新 exe（旧版曾糊） |
 | 窗口不响应按键 | 点击窗口使其获得焦点；某些系统浮窗（如"快速设置"）会抢焦点，先关掉 |
-| 想复建/改主题图集 | 见 `HANDOFF.md` 与 `tools/make_themed_art.py`、`make_art_runs.py` |
+| 想改主题图集 | 见上一节与 `tools/make_themed_art.py`、`make_art_runs.py` |
 
 ## 11. 已知限制
 
 - 游戏内实机"同轨同位"画面对照、以及电平 >44 格的精确屏幕色，需人工播放原版配合截帧
-  （原版游戏不接受模拟按键，无法自动导航）。详见 `HANDOFF.md` §6。
+  （原版游戏不接受模拟按键，无法自动导航），因此这两项目前仍是估算值。
 - 频率刻度用 UI 像素字绘制（清晰实心），与原版那套更细的轴字体字形略有差异；数值正确。
 - 入场"白闪"未复刻（仅暗场淡入）。
 
 ## 12. 字体与授权
 
 界面字形来自社区 hellsinker-fonts 包与原版提取图集，授权见
-`assets/fonts/readme.txt` 与 `notes/fonts_readme.txt`（CC0 / CC BY-SA 3.0）。
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)（CC0 / CC BY-SA 3.0）。
 本播放器为粉丝复刻工具，与 HellSinker 官方无关。
