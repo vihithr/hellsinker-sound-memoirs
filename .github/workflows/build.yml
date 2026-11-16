@@ -1,0 +1,71 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # build.bat skips its own vswhere/vcvars32 bootstrap when VSCMD_VER
+      # is already set, which is exactly what this action provides.
+      - name: Set up MSVC (x86)
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x86
+
+      - name: Build
+        shell: cmd
+        run: build.bat
+
+      - name: Smoke test
+        shell: pwsh
+        run: |
+          $exe = "dist\hsbgm.exe"
+          if (-not (Test-Path $exe)) { throw "build produced no exe" }
+          Get-Item $exe | Select-Object Name, Length | Format-List
+          & ".\$exe" --help
+          if ($LASTEXITCODE -ne 0) { throw "hsbgm --help exited $LASTEXITCODE" }
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path out | Out-Null
+          Copy-Item dist\hsbgm.exe out\
+          Copy-Item USAGE.md, LICENSE, THIRD_PARTY_NOTICES.md out\
+          Compress-Archive -Path out\* -DestinationPath hsbgm-win32.zip -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hsbgm-win32
+          path: |
+            dist/hsbgm.exe
+            hsbgm-win32.zip
+          if-no-files-found: error
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/hsbgm.exe
+            hsbgm-win32.zip
+          generate_release_notes: true
+          body: |
+            独立 Windows 点唱机，复刻 HellSinker 的 SOUND MEMOIRS 界面。
+
+            - `hsbgm.exe` — 单文件，双击即可运行（静态链接，无运行库依赖）
+            - `hsbgm-win32.zip` — 同上，附带 `USAGE.md` 与许可声明
+
+            播放游戏曲目需要本机安装正版 HellSinker（程序会自动探测，或在 `hsbgm.ini`
+            里设 `GameDir=`）；只放本地音乐可直接 `hsbgm.exe --file <路径>`，或把音频
+            文件拖进窗口。使用说明见 [USAGE.md](https://github.com/${{ github.repository }}/blob/main/USAGE.md)。
