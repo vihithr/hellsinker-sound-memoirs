@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#d9e3e0">
+  <meta name="color-scheme" content="light">
+  <meta name="description" content="SOUND MEMOIRS local web player prototype">
+  <title>SOUND MEMOIRS / Local Archive</title>
+  <link rel="icon" href="./favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./styles.css">
+  <script src="./app.js" defer></script>
+</head>
+<body data-theme="original">
+  <div class="scene-lines" aria-hidden="true"></div>
+  <div class="page">
+    <header class="topbar">
+      <div class="brand-block">
+        <span class="brand-code" aria-hidden="true">SM<br><b>01</b></span>
+        <div class="brand-copy">
+          <p class="eyebrow">
+            <span class="status-dot" aria-hidden="true"></span>
+            <span data-copy="mode-label">LOCAL AUDIO TERMINAL / 640×480 LINEAGE</span>
+          </p>
+          <h1 class="brand-title" aria-label="Sound Memoirs">
+            <span>SOUND</span>
+            <span>MEMOIRS</span>
+          </h1>
+        </div>
+      </div>
+
+      <nav class="theme-switch" aria-label="视觉主题">
+        <span class="theme-switch-label">VIEW</span>
+        <button class="theme-option is-active" type="button" data-theme-choice="original" aria-pressed="true">
+          <svg class="icon" aria-hidden="true"><use href="#i-activity"></use></svg>
+          <span>INSTRUMENT</span>
+          <b>01</b>
+        </button>
+        <button class="theme-option" type="button" data-theme-choice="paper" aria-pressed="false">
+          <svg class="icon" aria-hidden="true"><use href="#i-archive"></use></svg>
+          <span>PAPER</span>
+          <b>02</b>
+        </button>
+      </nav>
+
+      <div class="privacy-seal" title="音频文件仅在当前浏览器标签页内读取">
+        <svg class="icon" aria-hidden="true"><use href="#i-shield-check"></use></svg>
+        <span><b>LOCAL ONLY</b> / 不上传</span>
+      </div>
+    </header>
+
+    <main class="app-frame" id="drop-zone">
+      <div class="frame-registration frame-registration--tl" aria-hidden="true">+</div>
+      <div class="frame-registration frame-registration--tr" aria-hidden="true">+</div>
+      <div class="frame-registration frame-registration--bl" aria-hidden="true">+</div>
+      <div class="frame-registration frame-registration--br" aria-hidden="true">+</div>
+
+      <div class="utility-strip">
+        <div class="utility-block">
+          <span class="utility-key">BUS</span>
+          <strong id="bus-state">READY / LOCAL INPUT</strong>
+        </div>
+        <div class="utility-rule" aria-hidden="true"></div>
+        <div class="utility-block utility-block--right">
+          <span class="utility-key">DATE</span>
+          <time id="session-clock" datetime="">----.--.--</time>
+        </div>
+      </div>
+
+      <div class="workspace">
+        <section class="display-module" aria-labelledby="display-heading">
+          <header class="module-heading">
+            <div>
+              <p class="section-code" data-copy="display-code">MONITOR / 43 BAND</p>
+              <h2 id="display-heading" data-copy="display-title">SIGNAL FIELD</h2>
+            </div>
+            <div class="signal-state" id="signal-state">
+              <span class="signal-lamp" aria-hidden="true"></span>
+              <span id="signal-label">STANDBY</span>
+            </div>
+          </header>
+
+          <div class="screen-bezel">
+            <div class="meter-rail meter-rail--left" aria-hidden="true">
+              <span class="meter-rail-label">L</span>
+              <span class="meter-rail-track"><i id="meter-left"></i></span>
+            </div>
+
+            <div class="scope">
+              <div class="scope-overlay" aria-hidden="true">
+                <span class="scope-corner scope-corner--tl">CH 01</span>
+                <span class="scope-corner scope-corner--tr">FFT 2048</span>
+                <span class="scope-corner scope-corner--bl">TIME</span>
+                <span class="scope-corner scope-corner--br">FREQ</span>
+                <span class="scope-wave-label">SIGNAL ENVELOPE</span>
+              </div>
+              <canvas id="visualizer" aria-label="实时音频频谱"></canvas>
+              <div class="frequency-scale" aria-hidden="true">
+                <span>52</span>
+                <span>110</span>
+                <span>280</span>
+                <span>540</span>
+                <span>1060</span>
+                <span>2080</span>
+                <span>4160</span>
+                <span>8K</span>
+                <span>16K</span>
+                <span>22K</span>
+              </div>
+            </div>
+
+            <div class="meter-rail meter-rail--right" aria-hidden="true">
+              <span class="meter-rail-label">R</span>
+              <span class="meter-rail-track"><i id="meter-right"></i></span>
+            </div>
+          </div>
+
+          <div class="now-readout">
+            <div class="album-cell" id="album-cell" aria-hidden="true">
+              <span class="album-grid"></span>
+              <span class="album-glyph">SM</span>
+              <img id="cover-image" alt="">
+            </div>
+            <div class="track-identity">
+              <p class="section-code" id="playing-kicker">NOW PLAYING / CH 00</p>
+              <h2 id="track-title">NO LOCAL FILE LOADED</h2>
+              <p id="track-artist">等待本地音频输入</p>
+            </div>
+            <div class="format-readout">
+              <span>FORMAT</span>
+              <strong id="track-format">—</strong>
+            </div>
+          </div>
+
+          <div class="seek-block">
+            <div
+              class="seek-track"
+              id="seek-track"
+              role="slider"
+              tabindex="0"
+              aria-label="播放进度"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              aria-valuenow="0"
+            >
+              <span class="seek-fill" id="seek-fill"></span>
+              <span class="seek-buffer" id="seek-buffer"></span>
+              <span class="seek-thumb" id="seek-thumb"></span>
+            </div>
+            <div class="time-line">
+              <span id="elapsed-time">00:00</span>
+              <span class="time-center" id="player-status">NO SIGNAL</span>
+              <span id="duration-time">00:00</span>
+            </div>
+          </div>
+
+          <div class="transport">
+            <div class="transport-side">
+              <button class="icon-button" id="shuffle-button" type="button" title="随机播放" aria-label="随机播放" aria-pressed="false">
+                <svg class="icon" aria-hidden="true"><use href="#i-shuffle"></use></svg>
+              </button>
+              <button class="icon-button repeat-button" id="repeat-button" type="button" title="循环模式：关闭" aria-label="循环模式：关闭">
+                <svg class="icon" aria-hidden="true"><use href="#i-repeat"></use></svg>
+                <span id="repeat-label">OFF</span>
+              </button>
+            </div>
+
+            <div class="transport-main">
+              <button class="icon-button transport-skip" id="previous-button" type="button" title="上一首" aria-label="上一首">
+                <svg class="icon" aria-hidden="true"><use href="#i-skip-back"></use></svg>
+              </button>
+              <button class="play-button" id="play-button" type="button" title="播放" aria-label="播放">
+                <svg class="icon play-icon" aria-hidden="true"><use href="#i-play"></use></svg>
+                <svg class="icon pause-icon" aria-hidden="true"><use href="#i-pause"></use></svg>
+              </button>
+              <button class="icon-button transport-skip" id="next-button" type="button" title="下一首" aria-label="下一首">
+                <svg class="icon" aria-hidden="true"><use href="#i-skip-forward"></use></svg>
+              </button>
+            </div>
+
+            <div class="volume-control">
+              <button class="icon-button" id="mute-button" type="button" title="静音" aria-label="静音">
+                <svg class="icon volume-on-icon" aria-hidden="true"><use href="#i-volume-2"></use></svg>
+                <svg class="icon volume-off-icon" aria-hidden="true"><use href="#i-volume-x"></use></svg>
+              </button>
+              <div
+                class="volume-track"
+                id="volume-track"
+                role="slider"
+                tabindex="0"
+                aria-label="音量"
+                aria-valuemin="0"
+                aria-valuemax="100"
+                aria-valuenow="80"
+              >
+                <span class="volume-fill" id="volume-fill"></span>
+                <span class="volume-thumb" id="volume-thumb"></span>
+              </div>
+              <output id="volume-value" for="volume-track">80</output>
+            </div>
+          </div>
+        </section>
+
+        <aside class="library-module" aria-labelledby="library-heading">
+          <header class="library-heading">
+            <div>
+              <p class="section-code" data-copy="library-code">STORAGE / LOCAL</p>
+              <h2 id="library-heading" data-copy="library-title">LOCAL INDEX</h2>
+            </div>
+            <button class="add-button" id="add-files-button" type="button" title="添加本地音频文件" aria-label="添加本地音频文件">
+              <svg class="icon" aria-hidden="true"><use href="#i-folder-plus"></use></svg>
+              <span>ADD FILES</span>
+            </button>
+          </header>
+
+          <label class="search-box" for="track-search">
+            <svg class="icon" aria-hidden="true"><use href="#i-search"></use></svg>
+            <input id="track-search" type="search" autocomplete="off" placeholder="FILTER TITLE / ARTIST / ALBUM">
+            <kbd aria-hidden="true">/</kbd>
+          </label>
+
+          <div class="library-summary">
+            <span id="library-count">000 ITEMS</span>
+            <span id="current-index-label">NO SELECTION</span>
+          </div>
+
+          <div class="queue-scroll" id="queue-scroll">
+            <ol class="queue-list" id="queue-list" aria-live="polite"></ol>
+            <div class="empty-state" id="empty-state">
+              <div class="empty-reticle" aria-hidden="true">
+                <svg class="icon"><use href="#i-file-audio"></use></svg>
+              </div>
+              <p class="empty-label">ARCHIVE EMPTY</p>
+              <h3>把声音放进来</h3>
+              <p>选择文件，或将一个或多个音频文件拖到页面任意位置。</p>
+              <button class="empty-action" id="empty-add-button" type="button">
+                <svg class="icon" aria-hidden="true"><use href="#i-folder-plus"></use></svg>
+                浏览本地音频
+              </button>
+              <span>MP3 · OGG · WAV · FLAC · M4A · OPUS</span>
+            </div>
+          </div>
+
+          <footer class="library-foot">
+            <div>
+              <span class="foot-led" aria-hidden="true"></span>
+              <span id="privacy-state">MEMORY BUFFER / PRIVATE</span>
+            </div>
+            <button class="text-button" id="clear-button" type="button" disabled>CLEAR</button>
+          </footer>
+        </aside>
+      </div>
+
+      <div class="frame-foot">
+        <p>
+          <span class="prompt-caret" aria-hidden="true">›</span>
+          <span data-copy="frame-message">DROP LOCAL AUDIO ANYWHERE / TOUCH & DRAG TO SEEK</span>
+        </p>
+        <p class="frame-foot-tech">
+          <span>43 BAND</span>
+          <span>WEB AUDIO</span>
+          <span>ZERO UPLOAD</span>
+        </p>
+      </div>
+    </main>
+
+    <footer class="page-foot">
+      <span>UNOFFICIAL LOCAL INTERFACE STUDY / SOUND MEMOIRS</span>
+      <span id="theme-foot-label">ORIGINAL INSTRUMENT LAYOUT</span>
+    </footer>
+  </div>
+
+  <input
+    id="file-input"
+    class="visually-hidden"
+    type="file"
+    accept="audio/*,.mp3,.ogg,.oga,.wav,.flac,.m4a,.aac,.opus,.webm,.wma,.mp4"
+    multiple
+  >
+
+  <div class="drop-overlay" id="drop-overlay" aria-hidden="true">
+    <div class="drop-target">
+      <svg class="icon" aria-hidden="true"><use href="#i-folder-down"></use></svg>
+      <span>RELEASE TO LOAD</span>
+      <strong>LOCAL AUDIO ONLY</strong>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <noscript>
+    <p class="noscript">此播放器需要启用 JavaScript。</p>
+  </noscript>
+
+  <svg class="icon-sprite" aria-hidden="true">
+    <symbol id="i-activity" viewBox="0 0 24 24">
+      <path d="M22 12h-4l-3 9L9 3l-3 9H2"></path>
+    </symbol>
+    <symbol id="i-archive" viewBox="0 0 24 24">
+      <rect width="20" height="5" x="2" y="3" rx="1"></rect>
+      <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"></path>
+      <path d="M10 12h4"></path>
+    </symbol>
+    <symbol id="i-folder-plus" viewBox="0 0 24 24">
+      <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path>
+      <path d="M12 10v6"></path>
+      <path d="M9 13h6"></path>
+    </symbol>
+    <symbol id="i-folder-down" viewBox="0 0 24 24">
+      <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path>
+      <path d="M12 18v-6"></path>
+      <path d="m9 15 3 3 3-3"></path>
+    </symbol>
+    <symbol id="i-shield-check" viewBox="0 0 24 24">
+      <path d="M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V5l8-3 8 3Z"></path>
+      <path d="m9 12 2 2 4-4"></path>
+    </symbol>
+    <symbol id="i-search" viewBox="0 0 24 24">
+      <circle cx="11" cy="11" r="8"></circle>
+      <path d="m21 21-4.3-4.3"></path>
+    </symbol>
+    <symbol id="i-file-audio" viewBox="0 0 24 24">
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"></path>
+      <path d="M14 2v6h6"></path>
+      <path d="M9 13v5"></path>
+      <path d="M12 11v7"></path>
+      <path d="M15 12v6"></path>
+    </symbol>
+    <symbol id="i-play" viewBox="0 0 24 24">
+      <path d="m6 3 14 9-14 9Z"></path>
+    </symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24">
+      <rect x="6" y="4" width="4" height="16" rx="1"></rect>
+      <rect x="14" y="4" width="4" height="16" rx="1"></rect>
+    </symbol>
+    <symbol id="i-skip-back" viewBox="0 0 24 24">
+      <path d="M19 20 9 12l10-8v16Z"></path>
+      <path d="M5 19V5"></path>
+    </symbol>
+    <symbol id="i-skip-forward" viewBox="0 0 24 24">
+      <path d="m5 4 10 8-10 8V4Z"></path>
+      <path d="M19 5v14"></path>
+    </symbol>
+    <symbol id="i-shuffle" viewBox="0 0 24 24">
+      <path d="m18 14 4 4-4 4"></path>
+      <path d="m18 2 4 4-4 4"></path>
+      <path d="M2 18h1.973a4 4 0 0 0 3.3-1.7l5.454-8.6a4 4 0 0 1 3.3-1.7H22"></path>
+      <path d="M2 6h1.972a4 4 0 0 1 3.6 2.2"></path>
+      <path d="M22 18h-6.041a4 4 0 0 1-3.3-1.8l-.359-.45"></path>
+    </symbol>
+    <symbol id="i-repeat" viewBox="0 0 24 24">
+      <path d="m17 2 4 4-4 4"></path>
+      <path d="M3 11v-1a4 4 0 0 1 4-4h14"></path>
+      <path d="m7 22-4-4 4-4"></path>
+      <path d="M21 13v1a4 4 0 0 1-4 4H3"></path>
+    </symbol>
+    <symbol id="i-volume-2" viewBox="0 0 24 24">
+      <path d="M11 5 6 9H2v6h4l5 4Z"></path>
+      <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+      <path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>
+    </symbol>
+    <symbol id="i-volume-x" viewBox="0 0 24 24">
+      <path d="M11 5 6 9H2v6h4l5 4Z"></path>
+      <path d="m22 9-6 6"></path>
+      <path d="m16 9 6 6"></path>
+    </symbol>
+    <symbol id="i-x" viewBox="0 0 24 24">
+      <path d="M18 6 6 18"></path>
+      <path d="m6 6 12 12"></path>
+    </symbol>
+  </svg>
+</body>
+</html>

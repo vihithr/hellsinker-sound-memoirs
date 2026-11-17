@@ -11,5 +11,5 @@ if not exist dist mkdir dist
 if not defined HSBGM_BUILD_EXE set "HSBGM_BUILD_EXE=dist\hsbgm.exe"
 rc /nologo /fo obj\memoirs.res src\memoirs.rc || exit /b 1
 cl /nologo /O2 /MT /w /c stb_vorbis.c /Foobj\stb_vorbis.obj || exit /b 1
-cl /nologo /std:c++17 /utf-8 /O2 /MT /EHsc /W3 /D_CRT_SECURE_NO_WARNINGS /Foobj\ src\common.cpp src\pak.cpp src\resolver.cpp src\decoder.cpp src\local_music.cpp src\audio.cpp src\panel_text.cpp src\catalog.cpp src\library.cpp src\ui.cpp src\main.cpp obj\stb_vorbis.obj obj\memoirs.res /Fe"%HSBGM_BUILD_EXE%" /link winmm.lib gdi32.lib user32.lib comdlg32.lib shell32.lib oleaut32.lib ole32.lib msimg32.lib shlwapi.lib propsys.lib uuid.lib mfplat.lib mfreadwrite.lib mfuuid.lib || exit /b 1
+cl /nologo /std:c++17 /utf-8 /O2 /MT /EHsc /W3 /D_CRT_SECURE_NO_WARNINGS /Foobj\ src\common.cpp src\core\pak_index.cpp src\pak.cpp src\resolver.cpp src\core\spectrum.cpp src\core\decoder.cpp src\local_music.cpp src\audio.cpp src\panel_text.cpp src\config_panel.cpp src\catalog.cpp src\catalog_windows.cpp src\library.cpp src\stage.cpp src\ui.cpp src\main.cpp obj\stb_vorbis.obj obj\memoirs.res /Fe"%HSBGM_BUILD_EXE%" /link winmm.lib gdi32.lib user32.lib comdlg32.lib shell32.lib oleaut32.lib ole32.lib msimg32.lib shlwapi.lib propsys.lib uuid.lib mfplat.lib mfreadwrite.lib mfuuid.lib || exit /b 1
 echo Built %HSBGM_BUILD_EXE%

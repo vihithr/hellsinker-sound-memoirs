@@ -1,29 +1,6 @@
 #include "pak.h"
 
-namespace {
-
-const unsigned int PAK_NUM_OFF  = 0x1F400;
-const unsigned int PAK_NAME_OFF = 0x1;     // name table starts at file offset 0x1
-const unsigned int PAK_NAME_LEN = 0x100;   // stride; 0xFF usable bytes
-const unsigned int PAK_LEN_OFF  = 0x1F404;
-const unsigned int PAK_OFS_OFF  = 0x1FBD4;
-const unsigned int PAK_DATA_OFF = 0x203A4;
-const unsigned int PAK_MAX_ENTRIES = 500;  // name/length/offset tables hold 500 slots
-
-unsigned int ReadU32(const unsigned char* p) {
-    return (unsigned int)p[0] | ((unsigned int)p[1] << 8) |
-           ((unsigned int)p[2] << 16) | ((unsigned int)p[3] << 24);
-}
-
-std::string NormalizeName(const std::string& raw) {
-    std::string s = ToLowerAscii(raw);
-    for (size_t i = 0; i < s.size(); ++i) {
-        if (s[i] == '/') s[i] = '\\';
-    }
-    return s;
-}
-
-} // namespace
+using memoirs::PAK_DATA_OFF;
 
 PakFile::PakFile() : file_(NULL), fileSize_(0) {}
 
@@ -58,39 +35,10 @@ bool PakFile::open(const std::string& path, std::string& err) {
         return false;
     }
 
-    unsigned int n = ReadU32(&head[PAK_NUM_OFF]);
-    if (n == 0 || n > PAK_MAX_ENTRIES) {
+    if (!memoirs::parseIndex(head.data(), head.size(), fileSize_, entries_, err)) {
         fclose(f);
-        err = "implausible pak entry count in " + path;
+        err += ": " + path;
         return false;
-    }
-
-    entries_.clear();
-    entries_.reserve(n);
-    for (unsigned int i = 0; i < n; ++i) {
-        const unsigned char* np = &head[PAK_NAME_OFF + i * PAK_NAME_LEN];
-        char raw[PAK_NAME_LEN + 1];
-        unsigned int k = 0;
-        for (; k < PAK_NAME_LEN - 1; ++k) {
-            if (np[k] == 0) break;
-            raw[k] = (char)np[k];
-        }
-        raw[k] = 0;
-
-        PakEntry e;
-        e.name = std::string(raw);
-        e.nameLower = NormalizeName(e.name);
-        e.offset = ReadU32(&head[PAK_OFS_OFF + i * 4]);
-        e.length = ReadU32(&head[PAK_LEN_OFF + i * 4]);
-
-        if (e.length > fileSize_ || e.offset > fileSize_ - PAK_DATA_OFF ||
-            e.length > fileSize_ - PAK_DATA_OFF - e.offset) {
-            fclose(f);
-            entries_.clear();
-            err = "corrupt pak entry table in " + path;
-            return false;
-        }
-        entries_.push_back(e);
     }
 
     file_ = f;
@@ -109,17 +57,7 @@ void PakFile::close() {
 }
 
 const PakEntry* PakFile::find(const std::string& fileName) const {
-    std::string want = NormalizeName(fileName);
-    // Exact (normalized) match first.
-    for (size_t i = 0; i < entries_.size(); ++i) {
-        if (entries_[i].nameLower == want) return &entries_[i];
-    }
-    // Bare-name match (strip directories from both sides).
-    std::string wantBase = BaseName(want);
-    for (size_t i = 0; i < entries_.size(); ++i) {
-        if (BaseName(entries_[i].nameLower) == wantBase) return &entries_[i];
-    }
-    return NULL;
+    return memoirs::findEntry(entries_, fileName);
 }
 
 bool PakFile::read(const PakEntry& e, std::vector<unsigned char>& out, std::string& err) const {

@@ -13,12 +13,8 @@
 
 #include "common.h"
 
-struct PakEntry {
-    std::string name;      // stored as-is (typically "backboneteller\\X.ogg")
-    std::string nameLower; // normalized lower-case, '\\' separators
-    unsigned int offset;   // relative to payload base
-    unsigned int length;
-};
+#include "core/pak_index.h"
+using memoirs::PakEntry;
 
 class PakFile {
 public:

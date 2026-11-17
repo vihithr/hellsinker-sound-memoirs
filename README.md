@@ -14,7 +14,7 @@
 并且除了游戏自带的曲目，还能播放你自己硬盘里的歌。
 
 - **逻辑分辨率 640×480**，窗口可自由缩放 / 最大化，画面等比放大并保持锐利（像素字与矢量混合渲染）
-- **四套配色主题**：ORIGINAL / DARK / NEON / PAPER，按 `C` 循环切换
+- **五套配色主题**：ORIGINAL / DARK / NEON / PAPER / BLUEPRINT，按 `C` 循环切换
 - **双曲源**：`TR` 读取游戏 `backboneteller\bbt*.pak` 里的曲目；`LIB` 管理本地音乐
 - **三个紧凑像素频道**：`TR` 原版点唱机、`LIB` 本地曲库、`SYS` 系统设置；`F1` / `F2` / `F3` 直达，右键菜单也可切页
 - **频道栏空闲淡出**：无操作约 2.5 秒后 `TR` / `LIB` / `SYS` 平滑淡出，鼠标或键盘活动时立即恢复
@@ -27,14 +27,20 @@
 英文界面文字使用复刻原版的字格图集，中文和日文由独立的 CJK 绘制路径显示；
 标题使用矢量 run 绘制，频率轴的青色轴线为矢量，刻度文字来自英文字格图集。
 
-### 四套主题
+### 五套主题
 
 | ORIGINAL | NEON |
 |---|---|
 | ![original](docs/screenshot-original.png) | ![neon](docs/screenshot-neon.png) |
 
-`C` / `T` 在 ORIGINAL → DARK → NEON → PAPER 之间循环，配色同时作用于背景、频谱柱、电平、
+`C` / `T` 在 ORIGINAL → DARK → NEON → PAPER → BLUEPRINT 之间循环，配色同时作用于背景、频谱柱、电平、
 外框、选中高亮、标题与文字。
+
+### 浏览器与跨平台开发
+
+[TR / WASM 播放器](wasm/README.md) 使用同一套 C++ 索引、解码和频谱算法；导入自己的 PAK 或 WAV / OGG 即可使用。[Web 视觉实验](web/README.md) 是另一个独立入口，用来比较仪表和档案主题。模块边界、平台评估与测试入口见[架构说明](docs/architecture.md)。
+
+![BLUEPRINT 配色](docs/screenshot-blueprint.png)
 
 ## 下载
 

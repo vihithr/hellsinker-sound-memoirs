@@ -115,7 +115,7 @@
 
 ## 5. 配色主题
 
-按 **C**（或 **T**）循环切换四套主题：
+按 **C**（或 **T**）循环切换五套主题：
 
 | 主题 | 风格 |
 |---|---|
@@ -123,6 +123,7 @@
 | DARK | 深色底 + 橙红柱 + 青绿框 |
 | NEON | 近黑底 + 青柱 + 品红标题/选中 |
 | PAPER | 米纸底 + 砖红柱 + 灰绿框 |
+| BLUEPRINT | 普鲁士蓝底、浅青刻度、琥珀色读数 |
 
 主题影响背景、频谱柱、电平、波形、外框、选中高亮、标题、文字/数字/下划线颜色。
 当前主题名显示在窗口标题栏。
@@ -132,7 +133,7 @@
 `SYS` 保留原来的频道栏，把下方仪器面板换成 `SYSTEM / CONFIG`。面板使用四条压紧的横向设置带，每条都有红色定位标记、状态边线和右侧 `-` / `+` 按钮：
 
 - `OUTPUT LEVEL`：输出音量，范围 0～100，以 5 为步长调整；下方有 20 段音量表。
-- `PALETTE`：在 `ORIGINAL`、`DARK`、`NEON`、`PAPER` 之间循环，并显示四个配色样本。
+- `PALETTE`：在 `ORIGINAL`、`DARK`、`NEON`、`PAPER`、`BLUEPRINT` 之间循环，并显示四个配色样本。
 - `LANGUAGE`：在 `ENGLISH`、`简体中文`、`日本語` 之间循环，切换后界面和帮助文字即时更新。
 - `LIB FONT`：切换 LIB 曲目名及底部艺人/专辑行使用 `ORIGINAL`（原版英文字格 + Fusion Pixel CJK 回退）或 `PIXEL`（纯 Fusion Pixel）。不影响编号、搜索栏、按钮和帮助文字。
 
@@ -154,7 +155,7 @@ GameDir=F:\Games\Hellsinker   ; 游戏目录（播放游戏曲目用）
 Volume=90                     ; 音量 0..100
 LastTrack=43                  ; 启动时 TR 选中项（--play 会覆盖）
 Language=zh                   ; 界面与帮助语言：en / zh / ja
-Theme=0                       ; 配色：0 ORIGINAL / 1 DARK / 2 NEON / 3 PAPER
+Theme=0                       ; 配色：0 ORIGINAL / 1 DARK / 2 NEON / 3 PAPER / 4 BLUEPRINT
 LibFont=1                     ; LIB 曲名字体：0 ORIGINAL / 1 PIXEL（默认）
 ScaleMode=1                   ; 窗口缩放：0 FIT / 1 INTEGER（默认）
 ```
@@ -181,7 +182,7 @@ hsbgm.exe --help              帮助
 界面图集与标题 run 表是构建输入，已随仓库提供；只有改动配色映射或想调整字格时才需要重生成：
 
 ```
-python tools\make_themed_art.py    重映射出 assets/themed/cells_<i>.bmp（四套主题）
+python tools\make_themed_art.py    重映射出 assets/themed/cells_<i>.bmp（五套主题）
 python tools\make_art_runs.py      由 assets/memoirs-title.bmp 生成 src/themed_art_runs.h
 ```
 
@@ -211,3 +212,9 @@ python tools\make_art_runs.py      由 assets/memoirs-title.bmp 生成 src/theme
 界面文本资源的来源与授权见
 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)（CC0 / CC BY-SA 3.0）。
 本播放器为粉丝复刻工具，与 HellSinker 官方无关。
+
+### Windows 播放演出
+
+按 F7 在原版、星蚀（径向频谱）、地层（频谱历史）和相位习作（立体声轨迹）之间切换，也可以右键选择「播放演出」。选择保存在 VisualMode；C/T 仍切换界面配色。
+
+按 F8 或右键「侧翼效果」独立切换左右两侧：跟随中央、原版电平、折叠波形、双线带谱、点阵。选择保存到 WingMode。

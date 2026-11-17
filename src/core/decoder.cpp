@@ -1,7 +1,8 @@
 #include "decoder.h"
+#include <cstring>
 
 #define STB_VORBIS_HEADER_ONLY
-#include "../stb_vorbis.c"
+#include "../../stb_vorbis.c"
 
 namespace {
 
@@ -25,7 +26,7 @@ bool DecodeOgg(const unsigned char* data, unsigned long len, PcmBuffer& out,
     int vErr = 0;
     stb_vorbis* v = stb_vorbis_open_memory(data, (int)len, &vErr, NULL);
     if (!v) {
-        err = "vorbis open failed (code " + IntToStr(vErr) + ")";
+        err = "vorbis open failed (code " + std::to_string(vErr) + ")";
         return false;
     }
 
@@ -142,7 +143,7 @@ bool DecodeWav(const unsigned char* data, unsigned long len, PcmBuffer& out,
     }
     const bool isFloat = (fmtTag == 3);
     if (fmtTag != 1 && fmtTag != 3) {
-        err = "unsupported wav codec (tag " + IntToStr(fmtTag) + ")";
+        err = "unsupported wav codec (tag " + std::to_string(fmtTag) + ")";
         return false;
     }
     if (!isFloat && bits != 8 && bits != 16 && bits != 24 && bits != 32) {

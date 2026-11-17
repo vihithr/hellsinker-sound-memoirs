@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:,"><title>SOUND MEMOIRS · TR</title>
+<link rel="stylesheet" href="screen.css">
+<main>
+<header><strong>SOUND MEMOIRS</strong><span>TR &nbsp;/&nbsp; WEB ASSEMBLY</span></header>
+<canvas id="screen" width="640" height="480" tabindex="0" aria-label="TR 曲目表：方向键选择，回车播放，空格暂停"></canvas>
+<section aria-label="播放控制">
+<label class="open">载入文件<input id="files" disabled type="file" multiple accept=".pak,.ogg,.wav"></label>
+<select id="tracks" aria-label="选择曲目"></select><button id="play" disabled>播放</button><button id="stop" disabled>停止</button>
+<input id="seek" type="range" min="0" max="1000" value="0" aria-label="播放位置" disabled>
+<output id="status" role="status">正在初始化…</output>
+</section>
+<footer>选择本机 bbt 系列 PAK，或 WAV / OGG。文件只在此设备上读取。</footer>
+</main><script type="module" src="app.js"></script></html>

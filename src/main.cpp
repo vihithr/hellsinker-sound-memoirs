@@ -1,5 +1,6 @@
 // main.cpp - CLI entry points (--list, --selftest, --play, --bench) and the GUI.
 #include "common.h"
+#include "stage.h"
 #include "resolver.h"
 #include "decoder.h"
 #include "ui.h"
@@ -448,7 +449,10 @@ int main(int argc, char** argv) {
     if (settings.volume < 0) settings.volume = 0;
     if (settings.volume > 100) settings.volume = 100;
     settings.theme = GetIniInt(ini, "Theme", 0);
-    if (settings.theme < 0 || settings.theme > 3) settings.theme = 0;
+    settings.wingMode = GetIniInt(ini,"WingMode",0);
+    if(settings.wingMode<0 || settings.wingMode>=stage::wingCount) settings.wingMode=0;
+    settings.stageMode = GetIniInt(ini,"VisualMode",0);
+    if(settings.stageMode<0 || settings.stageMode>=stage::count) settings.stageMode=0;
     settings.libFont = GetIniInt(ini, "LibFont", 1);
     if (settings.libFont < 0 || settings.libFont > 1) settings.libFont = 1;
     settings.scaleMode = GetIniInt(ini, "ScaleMode", 1);
@@ -485,6 +489,8 @@ int main(int argc, char** argv) {
     if (!gameDir.empty()) PutIniString(ini, "GameDir", gameDir);
     PutIniInt(ini, "Volume", settings.volume);
     PutIniInt(ini, "Theme", settings.theme);
+    PutIniInt(ini, "WingMode", settings.wingMode);
+    PutIniInt(ini, "VisualMode", settings.stageMode);
     PutIniInt(ini, "LibFont", settings.libFont);
     PutIniInt(ini, "ScaleMode", settings.scaleMode);
     PutIniInt(ini, "LastTrack", settings.initialTrack);

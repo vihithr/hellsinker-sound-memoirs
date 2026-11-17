@@ -13,8 +13,7 @@
 
 #include "pak.h"
 
-enum { kTrackCount = 46 };
-extern const char* const kTrackNames[];        // hard-coded game order
+#include "core/game_tracks.h"
 
 enum SourceKind {
     SRC_NONE = 0,

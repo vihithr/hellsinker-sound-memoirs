@@ -1,3 +1,5 @@
+#include "core/spectrum.h"
+#include "stage.h"
 // ui.cpp - HellSinker "SOUND MEMOIRS" screen, reimplemented to match the
 // original at 640x480 logical resolution, rendered at 2x (1280x960).
 //
@@ -8,6 +10,7 @@
 #include "library.h"
 #include "tag_reader.h"
 #include "panel_text.h"
+#include "config_panel.h"
 #include <random>
 #include <shlwapi.h>
 
@@ -33,7 +36,7 @@ const int kPanelL = 142, kPanelR = 497, kPanelT = 4, kPanelB = 476;
 // spectrum window (beige field) and bars
 const int kSpecL = 148, kSpecT = 102, kSpecR = 492;
 const int kSpecAxisY = 236;             // cyan frequency axis line
-const int kBars = 43;                   // 43 columns, 7px wide, pitch 8
+const int kBars = memoirs::kSpectrumBands;                   // 43 columns, 7px wide, pitch 8
 const int kBarW = 7, kBarPitch = 8;
 const int kBarBaseY = 232;              // y2 of segment 0 (=408-176)
 const int kSegH = 2;                    // y1 = y2-2, step 3
@@ -58,45 +61,7 @@ const int kHintX = 144, kHintY = 472;
 // draw colors are texture-modulated on top of it.
 // Additional presets recolor the whole vector scene; text is drawn with the
 // private Hellsinker TTF so every element stays crisp at any scale.
-struct Theme {
-    const char* name;
-    COLORREF outer, panel, strip, stripHot, bar, barLit, frame, wave;
-    COLORREF ink, digit, underline, title, titleBlock, axisLabel, hint;
-    COLORREF selBase, selEdge, selFoot, selBand, selStripe;
-    COLORREF seam;
-};
-
-const Theme kThemes[] = {
-    { "ORIGINAL",
-      RGB(217,227,224), RGB(216,220,208), RGB(195,217,203), RGB(191,223,228),
-      RGB(204,50,25),  RGB(213,183,169), RGB(132,230,224), RGB(151,173,190),
-      RGB(39,39,39),   RGB(25,54,170),   RGB(79,210,185),  RGB(232,63,8),
-      RGB(205,205,205),RGB(232,120,40), RGB(128,133,131),
-      RGB(198,111,25), RGB(202,136,68), RGB(197,121,45), RGB(222,200,179),
-      RGB(255,255,255), RGB(217,222,217) },
-    { "DARK",
-      RGB(16,18,22),   RGB(24,28,34),    RGB(70,110,90),   RGB(120,200,220),
-      RGB(255,90,60),  RGB(120,80,70),   RGB(60,220,210),  RGB(90,120,160),
-      RGB(220,225,230),RGB(120,180,255), RGB(60,220,210),  RGB(255,120,60),
-      RGB(40,44,52),   RGB(255,170,60),  RGB(150,155,160),
-      RGB(200,120,30), RGB(230,160,70),  RGB(180,100,30),  RGB(50,56,66),
-      RGB(255,255,255), RGB(40,46,54) },
-    { "NEON",
-      RGB(8,10,18),    RGB(14,18,30),    RGB(40,200,160),  RGB(255,80,200),
-      RGB(0,230,255),  RGB(120,60,160),  RGB(0,255,220),   RGB(0,180,255),
-      RGB(230,240,255),RGB(255,220,80),  RGB(0,255,220),   RGB(255,60,180),
-      RGB(24,28,44),   RGB(0,230,255),   RGB(140,150,170),
-      RGB(255,60,180), RGB(255,120,220), RGB(200,40,140),  RGB(20,26,42),
-      RGB(255,255,255), RGB(24,32,50) },
-    { "PAPER",
-      RGB(246,242,232),RGB(238,232,218), RGB(150,170,140), RGB(200,120,90),
-      RGB(180,60,40),  RGB(210,180,150), RGB(90,110,100),  RGB(120,130,140),
-      RGB(50,48,44),   RGB(40,70,150),   RGB(90,140,120),  RGB(170,60,30),
-      RGB(222,216,202),RGB(150,90,40),   RGB(120,116,108),
-      RGB(190,120,50), RGB(210,150,80),  RGB(170,100,40),  RGB(232,224,206),
-      RGB(255,255,255), RGB(228,222,208) },
-};
-const int kThemeCount = (int)(sizeof(kThemes) / sizeof(kThemes[0]));
+#include "themes.generated.h"
 int g_themeIdx = 0;
 static inline const Theme& Th() { return kThemes[g_themeIdx]; }
 
@@ -124,7 +89,7 @@ const char* kFreqLabel[8] = { "52", "110", "540", "1060", "2080", "4160", "12K",
 const char* kTitle = "SOUND MEMOIRS";
 
 // ---- sweep / FFT -------------------------------------------------------
-const int kFftN = 1024;
+
 struct TrackState {
     ResolvedSource src;
     bool ok;
@@ -156,28 +121,19 @@ struct PlayerApp {
     // visualisation source
     std::vector<short> visPcm;
     int visRate;
-    float bars[kBars];       // smoothed state: (level + 11*old)/12
-    float barsPrev[kBars];   // old state (decay tail source)
-    float barsLevel[kBars];  // compressed level (current bar source)
-    float waveL[240];
-    float waveR[240];
-    float envL, envR;        // level-meter envelopes, normalized to 0..1
+    memoirs::Spectrum spectrum;
     unsigned int tick;       // frame counter since screen entry (60 fps)
 
     PlayerApp()
         : resolver(NULL), settings(NULL), selected(0), current(-1),
           audioReady(false), loading(false), localIndex(-1), hwnd(NULL),
           backDC(NULL), backBmp(NULL), backW(0), backH(0),
-          visRate(44100), envL(0.0f), envR(0.0f), tick(0) {
-        for (int i = 0; i < kBars; ++i) {
-            bars[i] = 0.0f; barsPrev[i] = 0.0f; barsLevel[i] = 0.0f;
-        }
-        for (int i = 0; i < 240; ++i) { waveL[i] = 0.0f; waveR[i] = 0.0f; }
-    }
+          visRate(44100), tick(0) {}
 };
 
 const int kExitIndex = -1;
 PlayerApp g_app;
+stage::Memory stageMemory;
 
 // ---- dynamic scale ------------------------------------------------------
 // The scene is authored at 640x480 logical pixels and rendered into a
@@ -196,7 +152,6 @@ void RefreshTitle();
 enum class Page { Tracks, Library, System };
 Page page = Page::Tracks, returnPage = Page::Tracks;
 int settingRow = 0, hoverChannel = -1;
-constexpr int kSettingY0 = 288, kSettingPitch = 36, kSettingCount = 4;
 constexpr unsigned kRailIdleDelayFrames = 150;
 constexpr unsigned kRailFadeFrames = 60;
 unsigned lastRailActivityTick = 0;
@@ -215,6 +170,10 @@ std::vector<std::wstring> loadedPaths;
 int loadedSelection=-1, loadedOrder=Sequential;
 bool draggingSeek=false;
 double dragFraction=0;
+constexpr int seekLeft=154, seekRight=486, seekY=266;
+double seekFraction(double logicalX) {
+    return std::clamp((logicalX-seekLeft)/(seekRight-seekLeft),0.,1.);
+}
 std::wstring basenameW(const std::wstring&);
 std::wstring titleOf(const std::wstring& p) {
     auto t=tagReader.get(p);return t.title.empty()?basenameW(p):t.title;
@@ -621,145 +580,11 @@ void MoveSelection(int dcol, int drow) {
     InvalidateRect(app.hwnd, NULL, FALSE);
 }
 
-// ---- FFT ---------------------------------------------------------------
-// Tables built by hs_dx9build.exe at 0x4A384C, 0x4A3CF8 and 0x4A3E60.
-struct SpectrumTables {
-    float window[kFftN];
-    float binWeight[kFftN / 2];
-    float sine[3 * kFftN / 4];
-
-    SpectrumTables() {
-        const double pi = 3.14159265;
-        for (int i = 0; i < kFftN; ++i)
-            window[i] = (float)(0.5 + 0.5 * cos(pi * (i - kFftN / 2) / kFftN));
-        for (int i = 0; i < kFftN / 2; ++i) {
-            float p = (float)pow((double)i / (kFftN / 2), 0.85);
-            binWeight[i] = (float)(p + (1.0 - p) * 0.025) / 150.0f;
-        }
-
-        float halfStep = (float)sin(pi / kFftN);
-        float dc = 2.0f * halfStep * halfStep;
-        float ds = sqrtf((2.0f - dc) * dc);
-        float step = 2.0f * dc, sn = 0.0f, cs = 1.0f;
-        sine[0] = 0.0f;
-        sine[kFftN / 4] = 1.0f;
-        for (int i = 1; i < kFftN / 8; ++i) {
-            cs -= dc;
-            dc += step * cs;
-            sn += ds;
-            ds -= step * sn;
-            sine[i] = sn;
-            sine[kFftN / 4 - i] = cs;
-        }
-        sine[kFftN / 8] = sqrtf(0.5f);
-        for (int i = 0; i < kFftN / 4; ++i) {
-            sine[kFftN / 2 - i] = sine[i];
-            sine[kFftN / 2 + i] = -sine[i];
-        }
-    }
-};
-
-void FFT(float* re, float* im, const SpectrumTables& table) {
-    for (int i = 1, j = 0; i < kFftN; ++i) {
-        int bit = kFftN >> 1;
-        for (; j & bit; bit >>= 1) j ^= bit;
-        j ^= bit;
-        if (i < j) { std::swap(re[i], re[j]); std::swap(im[i], im[j]); }
-    }
-    for (int len = 2; len <= kFftN; len <<= 1) {
-        for (int j = 0; j < len / 2; ++j) {
-            int phase = j * (kFftN / len);
-            float cs = table.sine[phase + kFftN / 4], sn = table.sine[phase];
-            for (int i = j; i < kFftN; i += len) {
-                int h = i + len / 2;
-                float vr = cs * re[h] - sn * im[h];
-                float vi = cs * im[h] + sn * re[h];
-                re[h] = re[i] - vr; im[h] = im[i] - vi;
-                re[i] += vr; im[i] += vi;
-            }
-        }
-    }
-}
-
-// bin range [start, count) for spectrum column k, exactly as sub_7EEAD8:
-//   k 0..5 : 1 bin  (index k)
-//   k 6..11: 3 bins starting 3k-12
-//   k 12..17: 4 bins starting 4k-24
-//   k 18..23: 8 bins starting 8k-96
-//   k 24..29: 16 bins starting 16k-288
-//   k 30..42: 64 bins starting 64k-1728
-// The 1024-long magnitude array is interleaved: [mag0, mag1023, mag1, mag1022, ...]
-static void BarBins(int k, int* start, int* count) {
-    if (k < 6)       { *start = k;          *count = 1; }
-    else if (k < 12) { *start = 3 * k - 12; *count = 3; }
-    else if (k < 18) { *start = 4 * k - 24; *count = 4; }
-    else if (k < 24) { *start = 8 * k - 96; *count = 8; }
-    else if (k < 30) { *start = 16 * k - 288; *count = 16; }
-    else             { *start = 64 * k - 1728; *count = 64; }
-}
-
-static float MeterEnvelope(float previous, short first, short second) {
-    float level = (abs((int)first) + abs((int)second)) / (2.0f * 32767.0f);
-    return level <= previous ? (5 * previous + level) / 6 : (7 * level + previous) / 8;
-}
-
 void UpdateVisualization() {
-    PlayerApp& app = g_app;
-    const size_t total = app.visPcm.size() / 2;
-    if (!total || !app.audio.isPlaying()) {
-        memset(app.bars, 0, sizeof(app.bars));
-        memset(app.barsPrev, 0, sizeof(app.barsPrev));
-        memset(app.barsLevel, 0, sizeof(app.barsLevel));
-        memset(app.waveL, 0, sizeof(app.waveL));
-        memset(app.waveR, 0, sizeof(app.waveR));
-        app.envL = app.envR = 0.0f;
-        return;
-    }
-
-    static const SpectrumTables table;
-    float re[kFftN], im[kFftN], mag[kFftN];
-    // Original cursor (0x7EFD2E): bytes = elapsed*176400, then
-    // abs(bytes - 0x5622) &~3 % bufferSize — 125 ms compensation.
-    // FFT, waveforms and meters all share this cursor.
-    long long bytes = (long long)(app.audio.positionSeconds() * app.visRate) * 4 - 22050;
-    if (bytes < 0) bytes = -bytes;
-    const size_t first = (size_t)(bytes / 4) % total;
-    size_t frame = first;
-    for (int i = 0; i < kFftN; ++i) {
-        short left = app.visPcm[2 * frame], right = app.visPcm[2 * frame + 1];
-        re[i] = left * table.window[i];
-        im[i] = right * table.window[i];
-        if ((i % 4) == 0 && i / 4 < 240) {
-            app.waveL[i / 4] = (float)(right / 512);
-            app.waveR[i / 4] = (float)(left / 512);
-        }
-        if (++frame == total) frame = 0;
-    }
-    FFT(re, im, table);
-    for (int i = 0; i < kFftN / 2; ++i) {
-        int mirror = kFftN - 1 - i;
-        float scale = table.binWeight[i] / kFftN;
-        mag[2 * i] = fabsf(re[i] * scale) + fabsf(im[i] * scale);
-        mag[2 * i + 1] = fabsf(re[mirror] * scale) + fabsf(im[mirror] * scale);
-    }
-    for (int k = 0; k < kBars; ++k) {
-        int start, count;
-        BarBins(k, &start, &count);
-        float sum = 0;
-        for (int b = 0; b < count; ++b) sum += mag[start + b];
-        int level = (int)(sum * 128.0f / count);
-        int old = (int)app.bars[k];
-        // groups 24..29 average with the old state BEFORE compression
-        if (k >= 24 && k < 30) level = (old + level) / 2;
-        if (level > 96) level = (level - 96) / 2 + 96;
-        if (level > 64) level = (level - 64) / 2 + 64;
-        app.bars[k] = (float)((level + 11 * old) / 12);
-        app.barsPrev[k] = (float)old;
-        app.barsLevel[k] = (float)level;
-    }
-    const size_t second = (first + 4) % total;
-    app.envL = MeterEnvelope(app.envL, app.visPcm[2 * first + 1], app.visPcm[2 * second + 1]);
-    app.envR = MeterEnvelope(app.envR, app.visPcm[2 * first], app.visPcm[2 * second]);
+    auto& app = g_app;
+    const size_t frames = app.audio.isPlaying() ? app.visPcm.size()/2 : 0;
+    const size_t first = frames ? memoirs::visualCursor(app.audio.positionSeconds(),app.visRate,frames) : 0;
+    memoirs::analyze(app.spectrum,app.visPcm.data(),frames,first);
 }
 
 // ---- painting ----------------------------------------------------------
@@ -776,8 +601,8 @@ void PaintBackdrop(HDC dc) {
 // (same array as the left waveform), right meter reads the LEFT channel.
 void PaintLevelMeter(HDC dc) {
     PlayerApp& app = g_app;
-    int nL = (int)(app.envL * 90.0f);
-    int nR = (int)(app.envR * 90.0f);
+    int nL = (int)(app.spectrum.envL * 90.0f);
+    int nR = (int)(app.spectrum.envR * 90.0f);
     for (int i = 0; i <= nL && nL > 0; ++i) {
         int y2 = 479 - 8 * i, y1 = 473 - 8 * i;
         FillRectCol(dc, S(4), S(y1), S(138), S(y2), i > 44 ? kColStripHot : kColStrip);
@@ -799,7 +624,7 @@ void PaintSideWave(HDC dc) {
     for (int side = 0; side < 2; ++side) {
         float base = side == 0 ? 70.0f : 570.0f;
         for (int i = 0; i < 240; ++i) {
-            float dx = side == 0 ? app.waveL[i] : app.waveR[i];
+            float dx = side == 0 ? app.spectrum.waveL[i] : app.spectrum.waveR[i];
             pts[i].x = S((int)(base + dx));
             pts[i].y = S(2 * i);
         }
@@ -854,8 +679,8 @@ void PaintSpectrum(HDC dc) {
     // 43 columns: current level (tex 88) from the compressed level, decay
     // tail (tex 87) from the OLD smoothed state down to level/4.
     for (int k = 0; k < kBars; ++k) {
-        int level = (int)app.barsLevel[k];
-        int old = (int)app.barsPrev[k];
+        int level = (int)app.spectrum.barsLevel[k];
+        int old = (int)app.spectrum.barsPrev[k];
         int x1 = S(kSpecL + kBarPitch * k);
         int x2 = S(kSpecL + kBarPitch * k + kBarW);
         if (level > 3) {
@@ -893,7 +718,7 @@ void PaintSpectrum(HDC dc) {
 
 void PaintTitle(HDC dc) {
     // drawn as vector runs (crisp at any resolution), not a bitmap blit
-    DrawRuns(dc, kTitleRuns[g_themeIdx], kTitleRunsN[g_themeIdx], 152, 18,
+    DrawRuns(dc, kTitleRuns, kTitleRunsN, 152, 18,
              Th().title, Th().titleBlock);
 }
 
@@ -995,17 +820,26 @@ void PaintInfo(HDC dc) {
     snprintf(timeBuf, sizeof(timeBuf), "PLAY TIME   : %02dSEC", secs);
     std::string line2 = timeBuf;
 
+    // Line 1 includes the "NOW PLAYING" prefix, so a 24-character local title
+    // used to make the underline 34 logical pixels wider than the content box.
+    const int lineLeft=x-4, lineRight=486;
+    const int line1Capacity=max(0,(lineRight-lineLeft)/8);
+    if((int)line1.size()>line1Capacity) {
+        if(line1Capacity>=3) line1.replace(line1Capacity-3,std::string::npos,"...");
+        else line1.resize(line1Capacity);
+    }
+
     // no-underline cells; the underline is ONE continuous horizontal strip
     // per line drawn AFTER both lines (line 2's opaque cells would otherwise
     // overwrite line 1's baked underline).  VOL/theme sit past the strip.
-    if (app.current == kTrackCount && app.localIndex >= 0 &&
+    if (app.current == kTrackCount && app.localIndex >= 0 && app.localIndex < (int)app.playlist.size() &&
         basenameW(app.playlist[app.localIndex]).find_first_not_of(L"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 ._-()") != std::wstring::npos)
-        lineText(dc,x-4,y1-7,490,y1+4,basenameW(app.playlist[app.localIndex]),Th().digit);
+        lineText(dc,lineLeft,y1-7,lineRight,y1+4,basenameW(app.playlist[app.localIndex]),Th().digit);
     else DrawCells(dc, line1, x, y1, 3);
     DrawCells(dc, line2, x, y2, 3);
     int w1 = (int)line1.size() * 8;
-    HLine(dc, S(x - 4), S(x - 4) + S(w1), S(y1 + 4), Th().underline, max(1, S(1)));
-    HLine(dc, S(x - 4), S(x - 4) + S(19 * 8), S(y2 + 4), Th().underline, max(1, S(1)));
+    HLine(dc, S(lineLeft), S(lineLeft) + S(w1), S(y1 + 4), Th().underline, max(1, S(1)));
+    HLine(dc, S(lineLeft), S(lineLeft) + S(19 * 8), S(y2 + 4), Th().underline, max(1, S(1)));
 }
 
 void PaintHints(HDC dc) {
@@ -1097,7 +931,6 @@ void channelRail(HDC dc) {
         AlphaBlend(dc,left,top,width,height,savedDC,0,0,width,height,blend);
     }
 }
-#include "config_panel.inl"
 std::wstring stamp(double seconds) {
     int s=max(0,(int)seconds);wchar_t t[32];swprintf_s(t,L"%02d:%02d",s/60,s%60);return t;
 }
@@ -1110,6 +943,24 @@ const wchar_t* orderLabel() {
     }
 }
 void changeOrder() {localOrder=(localOrder+1)%4;if(g_app.current==kTrackCount)g_app.audio.setLoop(localOrder==RepeatOne);}
+void paintSeekRail(HDC dc, double fraction) {
+    panelBox(dc,seekLeft,seekY,seekRight,seekY+2,Th().seam);
+    int end=seekLeft+int((seekRight-seekLeft)*std::clamp(fraction,0.,1.)+.5);
+    if(end>seekLeft) panelBox(dc,seekLeft,seekY,end,seekY+2,Th().bar);
+}
+// Give the pointer immediate feedback without rendering the spectrum or
+// resetting the audio device for every move. WM_PAINT uses the same rail.
+void previewSeek(HWND hwnd,double logicalX) {
+    dragFraction=seekFraction(logicalX);
+    if (!g_app.backDC) return;
+    paintSeekRail(g_app.backDC,dragFraction);
+    HDC dc=GetDC(hwnd);
+    if(dc) {
+        BitBlt(dc,g_offX+S(seekLeft),g_offY+S(seekY),S(seekRight)-S(seekLeft),
+               S(seekY+2)-S(seekY),g_app.backDC,S(seekLeft),S(seekY),SRCCOPY);
+        ReleaseDC(hwnd,dc);
+    }
+}
 void archivePaint(HDC dc) {
     auto& a=g_app;
     const PanelTextMode libraryTextMode = a.settings->libFont == 1
@@ -1121,8 +972,7 @@ void archivePaint(HDC dc) {
     lineText(dc,204,249,383,264,now,Th().ink);
     double duration=local?a.audio.durationSeconds():0, pos=draggingSeek?duration*dragFraction:a.audio.positionSeconds();
     lineText(dc,384,249,486,264,stamp(pos)+L"/"+stamp(duration),Th().digit,DT_RIGHT);
-    panelBox(dc,154,266,486,268,Th().seam);
-    if(duration>0) panelBox(dc,154,266,154+(int)(332*std::clamp(pos/duration,0.,1.)),268,Th().bar);
+    paintSeekRail(dc,duration>0?pos/duration:0);
     lineText(dc,154,271,330,289,tr(L"LOCAL ARCHIVE",L"本地曲库",L"音楽庫"),Th().ink);
     panelBox(dc,154,293,405,309,Th().strip);
     lineText(dc,159,293,400,309,query.empty()?tr(L"Search tracks",L"搜索曲名、艺人或专辑",L"曲・アーティスト検索"):query,Th().ink);
@@ -1146,7 +996,7 @@ void archivePaint(HDC dc) {
         lineText(dc,192,y,464,y+17,titleOf(a.playlist[idx]),Th().ink,DT_LEFT,
                  libraryTextMode);
         if(local && a.localIndex==idx) for(int j=0;j<3;++j) {
-            int height=a.audio.isPaused()?2:2+std::clamp((int)a.barsLevel[3+j*4],0,10);
+            int height=a.audio.isPaused()?2:2+std::clamp((int)a.spectrum.barsLevel[3+j*4],0,10);
             panelBox(dc,471+j*4,y+14-height,473+j*4,y+14,Th().bar);
         }
     }
@@ -1183,15 +1033,72 @@ void moveCursor(int delta) {
     if(!matches.empty()) cursor=std::clamp(cursor+delta,0,(int)matches.size()-1);
 }
 void playCursor() { if(!matches.empty()) OpenMusic(g_app.playlist[matches[cursor]]); }
+void PaintWings(HDC dc,int style){
+    if(style==1){ PaintLevelMeter(dc); PaintSideWave(dc); return; }
+    const auto& t=Th();
+    for(int side=0;side<2;++side){
+        int base=side?570:70;
+        const float* wave=side?g_app.spectrum.waveR:g_app.spectrum.waveL;
+        if(style==3){
+            POINT upper[220],lower[220];
+            for(int j=0;j<220;j++){
+                float v=wave[j], lag=wave[(j+12)%220];
+                int center=base+int(.58f*v), w=3+int(.37f*std::abs(v-lag));
+                int y=26+2*j;
+                upper[j]={S(center-w),S(y)};lower[j]={S(center+w),S(y)};
+                if(j%5==0)FillRectCol(dc,S(center-w),S(y),S(center+w+1),S(y+1),t.strip);
+            }
+            HGDIOBJ old=SelectObject(dc,GetStockObject(DC_PEN));
+            SetDCPenColor(dc,t.wave);Polyline(dc,upper,220);
+            SetDCPenColor(dc,t.bar);Polyline(dc,lower,220);SelectObject(dc,old);
+        }else{
+            for(int row=0;row<44;row++){
+                float peak=0;
+                for(int j=0;j<5;j++)peak=std::max(peak,std::abs(wave[row*5+j]));
+                int width=1+int(59*sqrt(std::min(1.f,peak/64.f))), y=27+row*10;
+                if(style==2){
+                    FillRectCol(dc,S(base-width),S(y),S(base+width),S(y+2),t.wave);
+                    if(row%5==0)for(int edge:{-61,58})
+                        FillRectCol(dc,S(base+edge),S(y),S(base+edge+4),S(y+1),t.hint);
+                }else{
+                    for(int col=0;col<12;col++){
+                        int x=base+(side?-1:1)*(col*10-55);
+                        bool lit=col*5+2<width;
+                        FillRectCol(dc,S(x-2),S(y-1),S(x+(lit?3:0)),S(y+(lit?3:1)),
+                            lit?(col>8?t.bar:t.wave):LerpCol(t.outer,t.wave,.30f));
+                    }
+                }
+            }
+        }
+        DrawCells(dc,side?"CH : L":"CH : R",base-20,13,3);
+    }
+}
 void PaintScene(HDC dc) {
     SetBkMode(dc, TRANSPARENT);
     PaintBackdrop(dc);
-    PaintLevelMeter(dc);
-    PaintSideWave(dc);
+    const int mode=g_app.settings->stageMode;
+    PaintWings(dc,g_app.settings->wingMode?g_app.settings->wingMode:mode+1);
     PaintFrame(dc);
-    PaintSpectrum(dc);
+    if(!mode) PaintSpectrum(dc);
+    else {
+        const auto& t=Th();
+        stage::paint({t.panel,LerpCol(t.seam,t.wave,.48f),t.wave,t.bar,t.frame},dc,g_scale,mode,g_app.spectrum,stageMemory);
+        const char* marks[]={"","ORBIT : 01","STRATA : 02","PHASE : 03"};
+        DrawCells(dc,marks[mode],152,74,3);
+    }
     PaintTitle(dc);
-    if(page==Page::System) settingsPaint(dc);
+    if(page==Page::System) {
+        const config_panel::State state = {
+            settingRow, g_app.settings->volume, Th().name,
+            lib::language(), g_app.settings->libFont
+        };
+        const config_panel::DrawContext drawing = {
+            dc, g_scale, PanelAtlas(),
+            {Th().panel, Th().frame, Th().bar, Th().ink, Th().strip,
+             Th().stripHot, Th().seam, Th().outer, Th().digit, Th().selEdge}
+        };
+        config_panel::Paint(drawing, state);
+    }
     else if(page==Page::Library) archivePaint(dc);
     else {
         PaintInfo(dc);
@@ -1247,7 +1154,7 @@ void OnTimer(HWND hwnd) {
     PlayerApp& app = g_app;
     if (app.audio.isMci()) app.audio.poll();
     if(tagReader.changed() && !query.empty())refreshIndex();
-    if(app.current==kTrackCount && !app.loading && app.audio.finished()) {
+    if(app.current==kTrackCount && !app.loading && !draggingSeek && app.audio.finished()) {
         int count=(int)app.playlist.size(), next=app.localIndex+1;
         if(localOrder==RepeatAll && count) next%=count;
         if(localOrder==Shuffle && count) {
@@ -1258,6 +1165,9 @@ void OnTimer(HWND hwnd) {
         if(next>=0 && next<count) OpenMusic(app.playlist[next]);
     }
     UpdateVisualization();
+    if(app.settings->stageMode)
+        stageMemory.advance(app.spectrum,app.current==kTrackCount?kTrackCount+app.localIndex:app.current,
+            app.audio.positionSeconds(),app.audio.isPlaying()&&!app.audio.isPaused());
     ++app.tick;
     InvalidateRect(hwnd, NULL, FALSE);
 }
@@ -1290,12 +1200,14 @@ void adjustSetting(int direction) {
 
 void OnKeyDown(HWND hwnd, WPARAM key) {
     PlayerApp& app = g_app;
+    if(key==VK_F8){app.settings->wingMode=(app.settings->wingMode+1)%stage::wingCount;InvalidateRect(hwnd,nullptr,FALSE);return;}
+    if(key==VK_F7){app.settings->stageMode=(app.settings->stageMode+1)%stage::count;InvalidateRect(hwnd,nullptr,FALSE);return;}
     if(key==VK_F6) {toggleIntegerScale(hwnd);return;}
     if(key>=VK_F1 && key<=VK_F3) {selectPage(hwnd,Page(key-VK_F1));return;}
     if(page==Page::System) {
         switch(key) {
-            case VK_UP: settingRow=(settingRow+kSettingCount-1)%kSettingCount;return;
-            case VK_DOWN: settingRow=(settingRow+1)%kSettingCount;return;
+            case VK_UP: settingRow=(settingRow+config_panel::kSettingCount-1)%config_panel::kSettingCount;return;
+            case VK_DOWN: settingRow=(settingRow+1)%config_panel::kSettingCount;return;
             case VK_LEFT: adjustSetting(-1);return;
             case VK_RETURN: case VK_RIGHT: adjustSetting(1);return;
             case VK_ESCAPE: selectPage(hwnd,returnPage);return;
@@ -1364,11 +1276,15 @@ void OnMouseDown(HWND hwnd, int x, int y, bool dbl) {
         return;
     }
     if(page==Page::System) {
-        if(lx>=154 && lx<486 && ly>=kSettingY0 &&
-           ly<kSettingY0+kSettingCount*kSettingPitch+5) {
-            settingRow=std::clamp((ly-kSettingY0)/kSettingPitch,0,kSettingCount-1);
-            if(lx>=268 && lx<296) adjustSetting(-1);
-            if(lx>=461) adjustSetting(1);
+        const config_panel::HitResult hit =
+            config_panel::HitTest(lx, ly);
+        if (hit) {
+            settingRow = hit.row;
+            if (hit.action == config_panel::HitAction::Decrease) {
+                adjustSetting(-1);
+            } else if (hit.action == config_panel::HitAction::Increase) {
+                adjustSetting(1);
+            }
         }
         return;
     }
@@ -1376,7 +1292,10 @@ void OnMouseDown(HWND hwnd, int x, int y, bool dbl) {
         if(ly>=293 && ly<309 && lx>=154 && lx<405) { focusSearch(true); return; }
         focusSearch(false);
         if(ly>=263 && ly<272 && lx>=154 && lx<486 && app.current==kTrackCount) {
-            draggingSeek=true;dragFraction=(lx-154)/332.;SetCapture(hwnd);return;
+            if(app.audio.durationSeconds()>0) {
+                draggingSeek=true; SetCapture(hwnd); previewSeek(hwnd,x/g_scale);
+            }
+            return;
         }
         if(ly>=293 && ly<309 && lx>=406 && lx<486) ChooseMusic(hwnd,false);
         if(ly>=313 && ly<439 && lx>=154 && lx<486) {
@@ -1457,6 +1376,16 @@ void popup(HWND hwnd,LPARAM coords) {
     AppendMenuW(m,MF_STRING|(g_app.settings->scaleMode?MF_CHECKED:0),
                  kIntegerScaleCommand,
                  tr(L"Integer scaling\tF6",L"整数倍缩放\tF6",L"整数倍拡大\tF6"));
+    HMENU stages=CreatePopupMenu();
+    if(stages){
+        for(int i=0;i<stage::count;i++)AppendMenuW(stages,MF_STRING|(g_app.settings->stageMode==i?MF_CHECKED:0),30+i,stage::name(i));
+        AppendMenuW(m,MF_POPUP,(UINT_PTR)stages,tr(L"Playback visuals   F7",L"播放演出   F7",L"再生演出   F7"));
+    }
+    HMENU wings=CreatePopupMenu();
+    if(wings){
+        for(int i=0;i<stage::wingCount;i++)AppendMenuW(wings,MF_STRING|(g_app.settings->wingMode==i?MF_CHECKED:0),40+i,stage::wingName(i));
+        AppendMenuW(m,MF_POPUP,(UINT_PTR)wings,tr(L"Side displays   F8",L"侧翼效果   F8",L"サイド表示   F8"));
+    }
     if(page==Page::Library) {
         AppendMenuW(m,MF_SEPARATOR,0,nullptr);
         AppendMenuW(m,MF_STRING,1,tr(L"Import folder...",L"导入文件夹…",L"フォルダーを追加…"));
@@ -1470,6 +1399,8 @@ void popup(HWND hwnd,LPARAM coords) {
     DestroyMenu(m);
     if(cmd>=10 && cmd<=12)selectPage(hwnd,Page(cmd-10));
     else if(cmd==int(kIntegerScaleCommand))toggleIntegerScale(hwnd);
+    else if(cmd>=40 && cmd<40+stage::wingCount){g_app.settings->wingMode=cmd-40;InvalidateRect(hwnd,nullptr,FALSE);}
+    else if(cmd>=30 && cmd<30+stage::count){g_app.settings->stageMode=cmd-30;InvalidateRect(hwnd,nullptr,FALSE);}
     else if(cmd>0)catalogAction(hwnd,cmd);
 }
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -1523,7 +1454,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         case WM_MOUSEMOVE: {
             int x=(int)floor(((short)LOWORD(lParam)-g_offX)/g_scale);
             int y=(int)floor(((short)HIWORD(lParam)-g_offY)/g_scale);
-            if(draggingSeek)dragFraction=std::clamp((x-154)/332.,0.,1.);
+            if(draggingSeek) previewSeek(hwnd,((short)LOWORD(lParam)-g_offX)/g_scale);
             int channel=(y>=272 && y<288 && x>=railX && x<railX+3*channelWidth)?(x-railX)/channelWidth:-1;
             if(channel>=0) {
                 SetCursor(LoadCursorW(nullptr,MAKEINTRESOURCEW(32649)));
@@ -1547,7 +1478,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         case WM_CAPTURECHANGED: draggingSeek=false;return 0;
         case WM_LBUTTONUP:
             if(draggingSeek) {
-                dragFraction=std::clamp((((short)LOWORD(lParam)-g_offX)/g_scale-154)/332.,0.,1.);
+                dragFraction=seekFraction(((short)LOWORD(lParam)-g_offX)/g_scale);
                 draggingSeek=false;ReleaseCapture();
                 if(app.current==kTrackCount)app.audio.seek(app.audio.durationSeconds()*dragFraction);
             }
