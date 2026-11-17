@@ -1033,7 +1033,7 @@ void moveCursor(int delta) {
     if(!matches.empty()) cursor=std::clamp(cursor+delta,0,(int)matches.size()-1);
 }
 void playCursor() { if(!matches.empty()) OpenMusic(g_app.playlist[matches[cursor]]); }
-void PaintWings(HDC dc,int style){
+void PaintWings(HDC dc,int style,const stage::Memory& motion){
     if(style==1){ PaintLevelMeter(dc); PaintSideWave(dc); return; }
     const auto& t=Th();
     for(int side=0;side<2;++side){
@@ -1052,14 +1052,26 @@ void PaintWings(HDC dc,int style){
             SetDCPenColor(dc,t.wave);Polyline(dc,upper,220);
             SetDCPenColor(dc,t.bar);Polyline(dc,lower,220);SelectObject(dc,old);
         }else{
+            const int span=2+int(61*std::clamp(motion.wing[side],0.f,1.f));
             for(int row=0;row<44;row++){
                 float peak=0;
                 for(int j=0;j<5;j++)peak=std::max(peak,std::abs(wave[row*5+j]));
-                int width=1+int(59*sqrt(std::min(1.f,peak/64.f))), y=27+row*10;
+                const float contour=.34f+.66f*sqrt(std::min(1.f,peak/64.f));
+                int width=2+int((span-2)*contour), y=27+row*10;
                 if(style==2){
-                    FillRectCol(dc,S(base-width),S(y),S(base+width),S(y+2),t.wave);
-                    if(row%5==0)for(int edge:{-61,58})
-                        FillRectCol(dc,S(base+edge),S(y),S(base+edge+4),S(y+1),t.hint);
+                    const float heat=std::clamp(contour*.62f+motion.wing[side]*.38f,0.f,1.f);
+                    const COLORREF ink=row&1
+                        ?LerpCol(t.wave,t.underline,.62f+.16f*heat)
+                        :LerpCol(t.wave,t.bar,.08f+.34f*heat);
+                    FillRectCol(dc,S(base-width),S(y),S(base+width),S(y+2),ink);
+                    const int length=row%5==0?5:2;
+                    const COLORREF tick=row%5==0
+                        ?LerpCol(t.hint,t.bar,.34f+.34f*heat)
+                        :LerpCol(t.hint,t.underline,.42f+.22f*heat);
+                    for(int edge:{-64,63}){
+                        const int x=base+edge;
+                        FillRectCol(dc,S(x),S(y),S(x+(edge<0?length:-length)),S(y+1),tick);
+                    }
                 }else{
                     for(int col=0;col<12;col++){
                         int x=base+(side?-1:1)*(col*10-55);
@@ -1077,7 +1089,7 @@ void PaintScene(HDC dc) {
     SetBkMode(dc, TRANSPARENT);
     PaintBackdrop(dc);
     const int mode=g_app.settings->stageMode;
-    PaintWings(dc,g_app.settings->wingMode?g_app.settings->wingMode:mode+1);
+    PaintWings(dc,g_app.settings->wingMode?g_app.settings->wingMode:mode+1,stageMemory);
     PaintFrame(dc);
     if(!mode) PaintSpectrum(dc);
     else {
@@ -1165,9 +1177,9 @@ void OnTimer(HWND hwnd) {
         if(next>=0 && next<count) OpenMusic(app.playlist[next]);
     }
     UpdateVisualization();
-    if(app.settings->stageMode)
-        stageMemory.advance(app.spectrum,app.current==kTrackCount?kTrackCount+app.localIndex:app.current,
-            app.audio.positionSeconds(),app.audio.isPlaying()&&!app.audio.isPaused());
+    const bool playing=app.audio.isPlaying();
+    stageMemory.advance(app.spectrum,app.current==kTrackCount?kTrackCount+app.localIndex:app.current,
+        app.audio.positionSeconds(),playing,playing&&app.audio.isPaused());
     ++app.tick;
     InvalidateRect(hwnd, NULL, FALSE);
 }

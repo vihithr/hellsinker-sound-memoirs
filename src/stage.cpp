@@ -1,4 +1,5 @@
 #include "stage.h"
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 
@@ -11,11 +12,45 @@ const wchar_t* wingName(int i){
     static const wchar_t* names[]={L"Auto / 跟随中央",L"Level / 原版电平",L"Fold / 折叠波形",L"Ribbon / 双线带谱",L"Matrix / 点阵"};
     return names[i>=0 && i<wingCount?i:0];
 }
-void Memory::advance(const memoirs::Spectrum& s,int id,double seconds,bool running){
-    if(id!=track || (running && last>=0 && (seconds+.10<last || seconds-last>1.0))) {
+namespace {
+float follow(float current,float target,float dt,double attack,double release){
+    const double tau=target>current?attack:release;
+    return current+(target-current)*float(1.0-std::exp(-dt/tau));
+}
+float smoothstep(float edge0,float edge1,float value){
+    const float t=std::clamp((value-edge0)/(edge1-edge0),0.f,1.f);
+    return t*t*(3.f-2.f*t);
+}
+float channelDrive(float env,const float* wave){
+    double sum=0;
+    for(int i=0;i<240;i+=4){const double v=wave[i]/64.0;sum+=v*v;}
+    const float rms=float(std::sqrt(sum/60.0));
+    return smoothstep(.02f,.78f,std::max(env*2.7f,rms*1.8f));
+}
+}
+void Memory::advance(const memoirs::Spectrum& s,int id,double seconds,bool playing,bool paused){
+    if(id!=track || (playing && motion>=0 && (seconds+.10<motion || seconds-motion>1.0))){
         *this=Memory{}; track=id;
     }
-    if(!running || (last>=0 && seconds>=last && seconds-last<.045))return;
+    if(!playing){*this=Memory{};track=id;return;}
+    if(paused)return;
+    float dt=motion>=0?float(seconds-motion):1.f/60.f;
+    if(dt<=0)return;
+    dt=std::clamp(dt,.001f,.12f);
+    motion=seconds;
+
+    float low=0;
+    for(int i=0;i<6;++i)low+=std::clamp(s.barsLevel[i]/96.f,0.f,1.f);
+    low/=6.f;
+    lowFloor=follow(lowFloor,low,dt,.18,1.1);
+    lowSustain=follow(lowSustain,low,dt,.045,.75);
+    const float attack=std::max(0.f,low-lowFloor)*1.55f+std::max(0.f,low-lastLow)*.85f;
+    impact=follow(impact,std::clamp(attack,0.f,1.f),dt,.022,.24);
+    lastLow=low;
+    wing[0]=follow(wing[0],channelDrive(s.envL,s.waveL),dt,.030,.30);
+    wing[1]=follow(wing[1],channelDrive(s.envR,s.waveR),dt,.030,.30);
+
+    if(last>=0 && seconds>=last && seconds-last<.045)return;
     last=seconds;
     head=(head+1)%24; trace=(trace+1)%6; samples=std::min(24,samples+1);
     for(int i=0;i<43;i++)ridges[head][i]=std::min(1.f,s.barsLevel[i]/96.f);
@@ -43,22 +78,28 @@ POINT orbit(double a,double rad,double squash,double angle,int x,int y){
     double u=rad*cos(a),v=rad*squash*sin(a);
     return {LONG(std::lround(x+u*cos(angle)-v*sin(angle))),LONG(std::lround(y+u*sin(angle)+v*cos(angle)))};
 }
-void eclipse(Paper p,const Palette& c,const memoirs::Spectrum& s,double time){
+void eclipse(Paper p,const Palette& c,const memoirs::Spectrum& s,const Memory& m){
     constexpr int cx=320,cy=157;
+    const int ring=136+int(14*m.lowSustain+12*m.impact);
     for(int k=0;k<3;k++){
         POINT pts[97];const double tilt=(k-1)*.24;
-        for(int j=0;j<=96;j++)pts[j]=orbit(tau*j/96,151-k*12,.23,tilt,cx,cy);
-        p.path(pts,97,c.grid);
-        auto q=orbit(time*(.23+k*.08)+k*2,151-k*12,.23,tilt,cx,cy);
-        p.disc(q.x,q.y,2,c.accent);
+        for(int j=0;j<=96;j++)pts[j]=orbit(tau*j/96,ring-k*12,.23,tilt,cx,cy);
+        p.path(pts,97,k==0&&m.impact>.08f?mix(c.grid,c.accent,.28+.36*m.impact):c.grid);
+        if(m.lowSustain>.035f){
+            auto q=orbit(std::max(0.,m.last)*(.23+k*.08)+k*2,ring-k*12,.23,tilt,cx,cy);
+            p.disc(q.x,q.y,1+int(2*m.impact),mix(c.grid,c.accent,.32+.68*m.impact));
+        }
     }
-    p.disc(cx,cy,34,c.line);
-    for(int y=-30;y<=30;y+=3){int w=int(sqrt(900-y*y));p.rule(cx-w,cy+y,cx+w,cy+y,c.field);}
-    p.disc(cx+6,cy-2,26,c.field);
+    const int core=30+int(5*m.lowSustain+6*m.impact);
+    p.disc(cx,cy,core+4,c.line);
+    for(int y=-core;y<=core;y+=3){int w=int(sqrt(std::max(0,core*core-y*y)));p.rule(cx-w,cy+y,cx+w,cy+y,c.field);}
+    p.disc(cx+6,cy-2,std::max(18,core-8),c.field);
+    const int inner=34+int(8*m.impact);
     for(int j=0;j<86;j++){
         double a=tau*j/86;
-        int r=39+int(sqrt(std::min(1.f,s.barsLevel[j%43]/100.f))*25);
-        auto v=orbit(a,36,1,0,cx,cy),w=orbit(a,r,1,0,cx,cy);
+        const float local=std::sqrt(std::min(1.f,s.barsLevel[j%43]/100.f));
+        int r=inner+4+int(local*24+7*m.impact);
+        auto v=orbit(a,inner,1,0,cx,cy),w=orbit(a,r,1,0,cx,cy);
         p.rule(v.x,v.y,w.x,w.y,j%2?c.line:c.accent);
     }
 }
@@ -90,6 +131,38 @@ void phase(Paper p,const Palette& c,const Memory& m){
     }
     p.fill(x-1,y-1,3,3,c.accent);
 }
+void calibration(Paper p,const Palette& c){
+    const C dot=mix(c.field,c.grid,.32);
+    const C guide=mix(c.field,c.grid,.13);
+    for(int x=172;x<484;x+=48)p.rule(x,88,x,228,guide);
+    for(int y=92;y<232;y+=32)p.rule(158,y,482,y,guide);
+    for(int y=88;y<232;y+=12)
+        for(int x=156;x<484;x+=12)p.fill(x,y,1,1,dot);
+
+    const C rail=mix(c.field,c.grid,.62);
+    p.rule(154,84,154,232,rail);
+    p.rule(486,84,486,232,rail);
+    for(int y=88,i=0;y<232;y+=6,++i){
+        const int length=i%5==0?6:2;
+        p.rule(154,y,154+length,y,rail);
+        p.rule(486-length,y,486,y,rail);
+    }
+    for(int x=160,x0=0;x<486;x+=8,++x0){
+        const int length=x0%5==0?4:2;
+        p.rule(x,84,x,84+length,rail);
+        p.rule(x,232-length,x,232,rail);
+    }
+    for(int k=0;k<12;k++){
+        p.rule(158+k,88,158,88,rail);
+        p.rule(482-k,88,482,88,rail);
+        p.rule(158+k,228,158,228,rail);
+        p.rule(482-k,228,482,228,rail);
+    }
+    p.rule(158,88,158,100,rail);
+    p.rule(482,88,482,100,rail);
+    p.rule(158,216,158,228,rail);
+    p.rule(482,216,482,228,rail);
+}
 }
 void paint(const Palette& c,HDC d,float scale,int mode,const memoirs::Spectrum& s,const Memory& m){
     int save=SaveDC(d);if(!save)return;
@@ -97,7 +170,8 @@ void paint(const Palette& c,HDC d,float scale,int mode,const memoirs::Spectrum& 
     SetViewportExtEx(d,int(640*scale+.5f),int(480*scale+.5f),nullptr);
     IntersectClipRect(d,148,80,492,238);SelectObject(d,GetStockObject(DC_PEN));SelectObject(d,GetStockObject(DC_BRUSH));
     Paper p{d};p.fill(148,80,344,158,c.field);
-    if(mode==1)eclipse(p,c,s,std::max(0.,m.last));else if(mode==2)strata(p,c,m);else phase(p,c,m);
+    calibration(p,c);
+    if(mode==1)eclipse(p,c,s,m);else if(mode==2)strata(p,c,m);else phase(p,c,m);
     p.fill(148,236,344,2,c.frame);
     RestoreDC(d,save);
 }
