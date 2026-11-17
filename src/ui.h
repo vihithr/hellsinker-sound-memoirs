@@ -9,7 +9,12 @@ struct PlayerSettings {
     int initialTrack;   // -1 = none selected beyond track 0
     bool autoPlay;
     int volume;         // 0..100
-    PlayerSettings() : initialTrack(-1), autoPlay(false), volume(80) {}
+    int theme;          // 0..3
+    int libFont;        // 0 = original atlas-first, 1 = Fusion Pixel only
+    int scaleMode;      // 0 = fit window, 1 = integer scale when possible
+    PlayerSettings()
+        : initialTrack(-1), autoPlay(false), volume(80), theme(0), libFont(1),
+          scaleMode(1) {}
 };
 
 // Runs the window until the user closes it. Returns process exit code.

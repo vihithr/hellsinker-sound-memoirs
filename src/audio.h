@@ -1,4 +1,4 @@
-// audio.h - waveOut streaming playback with whole-file looping, plus an MCI
+// audio.h - waveOut streaming playback with transport controls, plus an MCI
 // fallback used only for loose .mp3 tracks (no mp3 decoder is bundled).
 #pragma once
 
@@ -15,7 +15,7 @@ public:
     bool init(std::string& err);   // opens the waveOut device (44.1k/16/2)
     void shutdown();
 
-    // Takes ownership of the decoded samples (swapped in) and starts looping.
+    // Takes ownership of the decoded samples (swapped in) and starts playback.
     bool playPcm(PcmBuffer& pcm, std::string& err);
     // Best-effort playback for loose .mp3 fallback tracks.
     bool playMci(const std::string& path, std::string& err);
@@ -28,7 +28,13 @@ public:
     int volume() const { return volume_; }
 
     double positionSeconds() const;
-    double durationSeconds() const;
+    double durationSeconds();
+
+    void togglePause();
+    void seek(double seconds);
+    bool isPaused();
+    void setLoop(bool loop);
+    bool finished();
 
     // Pump for the MCI loop; call from the UI timer.
     void poll();
@@ -37,7 +43,10 @@ private:
     static void CALLBACK WaveProc(HWAVEOUT hwo, UINT msg, DWORD_PTR inst, DWORD_PTR p1, DWORD_PTR p2);
     static DWORD WINAPI FeedProc(LPVOID param);
     void feedLoop();
-    void fillBuffer(int idx);
+    size_t fillBuffer(int idx);
+    bool startPcmLocked(size_t frame, bool keepPaused);
+    void resetWaveOutLocked();
+    void finishPcmLocked();
     void unprepareAll();
     void freeBuffers();
     void stopMciLocked();
@@ -49,7 +58,13 @@ private:
     std::vector<short>* pcm_;   // interleaved stereo
     size_t totalFrames_;
     size_t cursor_;
+    size_t positionBaseFrames_;
+    bool hdrQueued_[4];
+    int queuedBuffers_;
     volatile LONG playing_;
+    bool paused_;
+    bool finished_;
+    bool loop_;
     CRITICAL_SECTION cs_;
 
     // The waveOut callback only signals this event; a dedicated feeder thread
@@ -65,6 +80,8 @@ private:
 
     bool mciActive_;
     bool mciPlaying_;
+    bool mciPaused_;
+    bool mciFinished_;
     double mciPos_;
     double mciLen_;
 

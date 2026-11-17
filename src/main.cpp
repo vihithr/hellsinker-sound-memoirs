@@ -447,6 +447,12 @@ int main(int argc, char** argv) {
     settings.volume = GetIniInt(ini, "Volume", 80);
     if (settings.volume < 0) settings.volume = 0;
     if (settings.volume > 100) settings.volume = 100;
+    settings.theme = GetIniInt(ini, "Theme", 0);
+    if (settings.theme < 0 || settings.theme > 3) settings.theme = 0;
+    settings.libFont = GetIniInt(ini, "LibFont", 1);
+    if (settings.libFont < 0 || settings.libFont > 1) settings.libFont = 1;
+    settings.scaleMode = GetIniInt(ini, "ScaleMode", 1);
+    if (settings.scaleMode < 0 || settings.scaleMode > 1) settings.scaleMode = 1;
     settings.initialTrack = GetIniInt(ini, "LastTrack", 0);
     if (settings.initialTrack < 0 || settings.initialTrack >= kTrackCount) settings.initialTrack = 0;
     if (havePlay) {
@@ -478,6 +484,9 @@ int main(int argc, char** argv) {
 
     if (!gameDir.empty()) PutIniString(ini, "GameDir", gameDir);
     PutIniInt(ini, "Volume", settings.volume);
+    PutIniInt(ini, "Theme", settings.theme);
+    PutIniInt(ini, "LibFont", settings.libFont);
+    PutIniInt(ini, "ScaleMode", settings.scaleMode);
     PutIniInt(ini, "LastTrack", settings.initialTrack);
     return 0;
 }

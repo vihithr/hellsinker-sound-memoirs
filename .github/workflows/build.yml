@@ -42,6 +42,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path out | Out-Null
           Copy-Item dist\hsbgm.exe out\
           Copy-Item USAGE.md, LICENSE, THIRD_PARTY_NOTICES.md out\
+          Copy-Item assets/fonts/fusion-pixel-12px-monospaced-OFL.txt out\
           Compress-Archive -Path out\* -DestinationPath hsbgm-win32.zip -Force
 
       - uses: actions/upload-artifact@v5

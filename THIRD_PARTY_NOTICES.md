@@ -24,6 +24,21 @@ OGG Vorbis 解码器，随仓库以源码形式提供（`stb_vorbis.c`）。
 
 CC BY-SA 3.0：<https://creativecommons.org/licenses/by-sa/3.0/>
 
+### Fusion Pixel Font 12px Mono zh-Hans
+
+`assets/fonts/fusion-pixel-12px-monospaced-zh_hans.ttf` 是
+[Fusion Pixel Font / 缝合像素字体](https://github.com/TakWolf/fusion-pixel-font)
+官方 `12px monospaced` TTF 包中的简体中文字形版本，用于界面里的 CJK 文字。
+
+- 上游版本：`2026.11.10`
+- 官方发行包：<https://github.com/TakWolf/fusion-pixel-font/releases/tag/2026.11.10>
+- 字体文件 SHA-256：`31fc0fc4c7dd0250934e9e000d0c3d64958153d0308737adaf4bae09ac493537`
+- 版权：Copyright (c) 2022, TakWolf
+- 许可：SIL Open Font License 1.1；完整文本见
+  `assets/fonts/fusion-pixel-12px-monospaced-OFL.txt`
+
+该字体文件、OFL 文本和本声明也作为 `RCDATA` 资源编译进可执行文件。
+
 ## 界面图集（`assets/*.bmp`、`assets/themed/*.bmp`）
 
 `memoirs-cells.bmp`、`memoirs-title.bmp`、`memoirs-axis.bmp` 及其按主题重映射得到的

@@ -5,6 +5,11 @@
 // were recovered by measuring the original screen; the tuning values sit
 // inline next to the drawing code that consumes them.
 #include "ui.h"
+#include "library.h"
+#include "tag_reader.h"
+#include "panel_text.h"
+#include <random>
+#include <shlwapi.h>
 
 #include <mmsystem.h>
 #include <commdlg.h>
@@ -188,6 +193,56 @@ int g_bbW = 1280, g_bbH = 960;
 static inline int S(int v) { return (int)(v * g_scale + 0.5f); }
 static inline int Sf(float v) { return (int)(v * g_scale + 0.5f); }
 void RefreshTitle();
+enum class Page { Tracks, Library, System };
+Page page = Page::Tracks, returnPage = Page::Tracks;
+int settingRow = 0, hoverChannel = -1;
+constexpr int kSettingY0 = 288, kSettingPitch = 36, kSettingCount = 4;
+constexpr unsigned kRailIdleDelayFrames = 150;
+constexpr unsigned kRailFadeFrames = 60;
+unsigned lastRailActivityTick = 0;
+unsigned int switchedAt = 0;
+constexpr int railX=366, channelWidth=40;
+HWND searchEdit = nullptr;
+HFONT panelFont = nullptr;
+int fontPixels = 0, cursor = 0;
+constexpr int rows = 7;
+std::wstring query;
+std::vector<int> matches;
+TagReader tagReader;
+enum LocalOrder { Sequential, RepeatOne, RepeatAll, Shuffle };
+int localOrder=Sequential;
+std::vector<std::wstring> loadedPaths;
+int loadedSelection=-1, loadedOrder=Sequential;
+bool draggingSeek=false;
+double dragFraction=0;
+std::wstring basenameW(const std::wstring&);
+std::wstring titleOf(const std::wstring& p) {
+    auto t=tagReader.get(p);return t.title.empty()?basenameW(p):t.title;
+}
+void refreshIndex() {
+    int old = cursor >= 0 && cursor < (int)matches.size() ? matches[cursor] : -1;
+    matches.clear();
+    for(int i=0;i<(int)g_app.playlist.size();++i) {
+        const auto& p=g_app.playlist[i];
+        if(!query.empty() && !StrStrIW(basenameW(p).c_str(),query.c_str())) {
+            auto t=tagReader.get(p);
+            if(!StrStrIW(t.title.c_str(),query.c_str()) && !StrStrIW(t.artist.c_str(),query.c_str()) &&
+               !StrStrIW(t.album.c_str(),query.c_str())) continue;
+        }
+        matches.push_back(i);
+    }
+    auto it = std::find(matches.begin(), matches.end(), old);
+    cursor = it == matches.end() ? 0 : int(it - matches.begin());
+}
+HDC PanelAtlas();
+void lineText(HDC dc,int x,int y,int right,int bottom,const std::wstring& value,
+              COLORREF color,UINT align=DT_LEFT,
+              PanelTextMode mode=PanelTextMode::AtlasFirst) {
+    DrawPanelText(dc,{S(x),S(y),S(right),S(bottom)},value,color,align,g_scale,
+                  PanelAtlas(),mode);
+}
+std::wstring basenameW(const std::wstring& p) {return p.substr(p.find_last_of(L"/\\")+1);}
+
 
 RECT TrackRect(int i) {
     int col = i / kGridRows;   // column-major, like the game
@@ -304,6 +359,7 @@ struct ArtSet {
 };
 
 ArtSet g_atlas;
+HDC PanelAtlas() {return g_atlas.dc[g_themeIdx];}
 
 void EnsureArt() {
     g_atlas.Load(110);      // cells_<theme> (grid/info/hints pixel font)
@@ -358,14 +414,15 @@ bool PlayDecoded(PcmBuffer& pcm, std::string& err) {
 int AddLocal(const std::wstring& path) {
     PlayerApp& app = g_app;
     for (int i = 0; i < (int)app.playlist.size(); ++i)
-        if (app.playlist[i] == path) return i;
+        if (_wcsicmp(app.playlist[i].c_str(),path.c_str())==0) return i;
+    tagReader.enqueue(path);
     app.playlist.push_back(path);
     return (int)app.playlist.size() - 1;
 }
 
 void OpenMusic(const std::wstring& path) {
     PlayerApp& app = g_app;
-    app.localIndex = AddLocal(path);
+    int nextIndex=AddLocal(path);
     EnsureAudio();
     PcmBuffer pcm;
     std::string err = app.audioError;
@@ -377,6 +434,7 @@ void OpenMusic(const std::wstring& path) {
         if (app.audioReady && DecodeLocalMusic(path, pcm, err)) {
             app.audio.stop();
             app.current = -1;
+            app.audio.setLoop(localOrder==RepeatOne);
             ok = PlayDecoded(pcm, err);
         }
     } catch (const std::bad_alloc&) {
@@ -384,6 +442,7 @@ void OpenMusic(const std::wstring& path) {
     }
     app.loading = false;
     if (ok) {
+        app.localIndex=nextIndex;
         app.current = kTrackCount;
         app.errorText.clear();
         RefreshTitle();
@@ -403,7 +462,7 @@ void StepLocal(int delta) {
     OpenMusic(app.playlist[i]);
 }
 
-void ChooseMusic(HWND hwnd) {
+void ChooseMusic(HWND hwnd, bool autoplay = true) {
     wchar_t buf[32768] = {};
     OPENFILENAMEW dialog = {};
     dialog.lStructSize = sizeof(dialog);
@@ -436,7 +495,8 @@ void ChooseMusic(HWND hwnd) {
         int i = AddLocal(p);
         if (playIdx < 0) playIdx = i;
     }
-    OpenMusic(g_app.playlist[playIdx]);
+    refreshIndex();
+    if (autoplay) OpenMusic(g_app.playlist[playIdx]);
 }
 
 void StartTrack(int idx) {
@@ -465,6 +525,7 @@ void StartTrack(int idx) {
     app.errorText.clear();
     app.current = -1;
     app.audio.stop();
+    app.audio.setLoop(true);
     app.visPcm.clear();
     InvalidateRect(app.hwnd, NULL, FALSE);
     UpdateWindow(app.hwnd);
@@ -937,7 +998,10 @@ void PaintInfo(HDC dc) {
     // no-underline cells; the underline is ONE continuous horizontal strip
     // per line drawn AFTER both lines (line 2's opaque cells would otherwise
     // overwrite line 1's baked underline).  VOL/theme sit past the strip.
-    DrawCells(dc, line1, x, y1, 3);
+    if (app.current == kTrackCount && app.localIndex >= 0 &&
+        basenameW(app.playlist[app.localIndex]).find_first_not_of(L"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 ._-()") != std::wstring::npos)
+        lineText(dc,x-4,y1-7,490,y1+4,basenameW(app.playlist[app.localIndex]),Th().digit);
+    else DrawCells(dc, line1, x, y1, 3);
     DrawCells(dc, line2, x, y2, 3);
     int w1 = (int)line1.size() * 8;
     HLine(dc, S(x - 4), S(x - 4) + S(w1), S(y1 + 4), Th().underline, max(1, S(1)));
@@ -959,11 +1023,17 @@ void EnsureBackBuffer(PlayerApp& app, HDC refDC) {
     float sc = (float)ch / (float)kLogicalH;
     float scw = (float)cw / (float)kLogicalW;
     if (scw < sc) sc = scw;
+    if (app.settings && app.settings->scaleMode == 1 && sc >= 1.0f) {
+        sc = floor(sc + 0.0001f);
+    }
     int bw = (int)(kLogicalW * sc + 0.5f), bh = (int)(kLogicalH * sc + 0.5f);
-    if (app.backDC && app.backW == bw && app.backH == bh) return;
+
+    bool geometryChanged = app.backW != bw || app.backH != bh || g_offX != (cw-bw)/2 || g_offY != (ch-bh)/2;
     g_scale = sc;
     g_bbW = bw; g_bbH = bh;
     g_offX = (cw - bw) / 2; g_offY = (ch - bh) / 2;
+    if(geometryChanged && searchEdit && IsWindowVisible(searchEdit)) MoveWindow(searchEdit,g_offX+S(154),g_offY+S(293),S(251),S(16),FALSE);
+    if (app.backDC && app.backW == bw && app.backH == bh) return;
     if (app.backBmp) { DeleteObject(app.backBmp); app.backBmp = 0; }
     if (app.backDC) { DeleteDC(app.backDC); app.backDC = 0; }
     app.backDC = CreateCompatibleDC(refDC);
@@ -976,6 +1046,143 @@ void EnsureBackBuffer(PlayerApp& app, HDC refDC) {
     EnsureArt();
 }
 
+// The archive replaces the lower instrument panel; the visualizer keeps running.
+using lib::tr;
+void panelBox(HDC dc,int x,int y,int r,int b,COLORREF c) { FillRectCol(dc,S(x),S(y),S(r),S(b),c); }
+void noteRailActivity() { lastRailActivityTick = g_app.tick; }
+float channelRailOpacity() {
+    if (hoverChannel >= 0) return 1.0f;
+    const unsigned idle = g_app.tick - lastRailActivityTick;
+    if (idle <= kRailIdleDelayFrames) return 1.0f;
+    if (idle >= kRailIdleDelayFrames + kRailFadeFrames) return 0.0f;
+    return 1.0f - float(idle - kRailIdleDelayFrames) / kRailFadeFrames;
+}
+void channelRail(HDC dc) {
+    const int left=S(railX-4), top=S(272);
+    const int right=S(railX+3*channelWidth+4), bottom=S(288);
+    const int width=right-left, height=bottom-top;
+    const float opacity=channelRailOpacity();
+    const bool fading=opacity<0.999f;
+    static HDC savedDC=nullptr;
+    static HBITMAP savedBmp=nullptr;
+    static int savedW=0,savedH=0;
+    if(fading) {
+        if(savedW!=width || savedH!=height) {
+            if(savedBmp) DeleteObject(savedBmp);
+            if(savedDC) DeleteDC(savedDC);
+            savedDC=CreateCompatibleDC(dc);
+            savedBmp=CreateCompatibleBitmap(dc,width,height);
+            SelectObject(savedDC,savedBmp);
+            savedW=width;savedH=height;
+        }
+        BitBlt(savedDC,0,0,width,height,dc,left,top,SRCCOPY);
+    }
+    static const char* labels[]={"TR","LIB","SYS"};
+    for(int i=0;i<3;++i) {
+        int x=railX+i*channelWidth;
+        bool active=i==int(page);
+        if(page==Page::System) {
+            const wchar_t* configChannels[]={L"TR",L"LIB",L"SYS"};
+            lineText(dc,x+5,273,x+38,287,configChannels[i],active?Th().digit:Th().ink);
+        } else DrawCells(dc,labels[i],x+8,280,active?0:2);
+        if(i==hoverChannel && !active) panelBox(dc,x+4,286,x+30,287,Th().underline);
+        if(active) {
+            panelBox(dc,x,276,x+2,284,Th().bar);
+            panelBox(dc,x,285,x+5,286,Th().bar);
+        }
+    }
+    if(fading) {
+        const int cover=ClampI((int)((1.0f-opacity)*255.0f+0.5f),0,255);
+        BLENDFUNCTION blend={AC_SRC_OVER,0,(BYTE)cover,0};
+        AlphaBlend(dc,left,top,width,height,savedDC,0,0,width,height,blend);
+    }
+}
+#include "config_panel.inl"
+std::wstring stamp(double seconds) {
+    int s=max(0,(int)seconds);wchar_t t[32];swprintf_s(t,L"%02d:%02d",s/60,s%60);return t;
+}
+const wchar_t* orderLabel() {
+    switch(localOrder) {
+        case RepeatOne:return tr(L"ONE",L"单曲",L"一曲");
+        case RepeatAll:return tr(L"LOOP",L"列表循环",L"全曲");
+        case Shuffle:return tr(L"SHUFFLE",L"随机",L"ランダム");
+        default:return tr(L"ORDER",L"顺序",L"順番");
+    }
+}
+void changeOrder() {localOrder=(localOrder+1)%4;if(g_app.current==kTrackCount)g_app.audio.setLoop(localOrder==RepeatOne);}
+void archivePaint(HDC dc) {
+    auto& a=g_app;
+    const PanelTextMode libraryTextMode = a.settings->libFont == 1
+        ? PanelTextMode::PixelOnly : PanelTextMode::AtlasFirst;
+    auto now=a.current==kTrackCount && a.localIndex>=0 ? titleOf(a.playlist[a.localIndex]):
+        a.current>=0 ? std::wstring(L"TR / ")+std::to_wstring(a.current):std::wstring(tr(L"Standby",L"待机",L"待機"));
+    bool local=a.current==kTrackCount;
+    lineText(dc,154,249,201,264,a.audio.isPaused()?L"HOLD":L"ON AIR",Th().digit);
+    lineText(dc,204,249,383,264,now,Th().ink);
+    double duration=local?a.audio.durationSeconds():0, pos=draggingSeek?duration*dragFraction:a.audio.positionSeconds();
+    lineText(dc,384,249,486,264,stamp(pos)+L"/"+stamp(duration),Th().digit,DT_RIGHT);
+    panelBox(dc,154,266,486,268,Th().seam);
+    if(duration>0) panelBox(dc,154,266,154+(int)(332*std::clamp(pos/duration,0.,1.)),268,Th().bar);
+    lineText(dc,154,271,330,289,tr(L"LOCAL ARCHIVE",L"本地曲库",L"音楽庫"),Th().ink);
+    panelBox(dc,154,293,405,309,Th().strip);
+    lineText(dc,159,293,400,309,query.empty()?tr(L"Search tracks",L"搜索曲名、艺人或专辑",L"曲・アーティスト検索"):query,Th().ink);
+    lineText(dc,406,293,486,309,tr(L"Add files",L"添加音乐",L"曲を追加"),Th().digit,DT_CENTER);
+    int page=cursor/rows;
+    // Thin ruled slots echo the spectrum divisions even when the catalog is sparse.
+    for(int row=0;row<rows;++row) {
+        int y=330+row*18;
+        panelBox(dc,154,y,158,y+1,Th().frame);
+        panelBox(dc,160,y,486,y+1,Th().strip);
+    }
+    if(matches.empty()) {
+        lineText(dc,154,349,486,375,query.empty()?tr(L"Drop music here or choose + Add files",L"拖入音乐，或点击「添加音乐」",L"音楽をドロップ、または曲を追加"):
+            tr(L"No matching tracks",L"没有匹配的歌曲",L"一致する曲がありません"),Th().ink,DT_CENTER);
+    }
+    for(int row=0;row<rows && page*rows+row<(int)matches.size();++row) {
+        int pos=page*rows+row,idx=matches[pos],y=313+row*18;
+        if(cursor==pos) panelBox(dc,154,y+2,157,y+15,Th().selEdge);
+        wchar_t n[24];swprintf_s(n,L"%03d",idx+1);
+        lineText(dc,161,y,188,y+17,n,Th().digit);
+        lineText(dc,192,y,464,y+17,titleOf(a.playlist[idx]),Th().ink,DT_LEFT,
+                 libraryTextMode);
+        if(local && a.localIndex==idx) for(int j=0;j<3;++j) {
+            int height=a.audio.isPaused()?2:2+std::clamp((int)a.barsLevel[3+j*4],0,10);
+            panelBox(dc,471+j*4,y+14-height,473+j*4,y+14,Th().bar);
+        }
+    }
+    panelBox(dc,154,440,486,441,Th().frame);
+    lineText(dc,154,443,212,460,orderLabel(),Th().digit);
+    lineText(dc,213,443,277,460,local && !a.audio.isPaused()?tr(L"PAUSE",L"暂停",L"一時停止"):tr(L"PLAY",L"播放",L"再生"),Th().digit);
+    lineText(dc,278,443,331,460,tr(L"Stop",L"停止",L"停止"),Th().digit);
+    lineText(dc,341,443,375,460,L"◀",Th().digit,DT_CENTER);
+    lineText(dc,375,443,453,460,std::to_wstring(matches.empty()?0:page+1)+L" / "+std::to_wstring((matches.size()+rows-1)/rows),Th().ink,DT_CENTER);
+    lineText(dc,453,443,486,460,L"▶",Th().digit,DT_CENTER);
+    if(!matches.empty()) {
+        auto& path=a.playlist[matches[cursor]];auto t=tagReader.get(path);
+        auto info=t.artist+(t.artist.empty()||t.album.empty()?L"":L" / ")+t.album;
+        lineText(dc,154,461,486,476,info.empty()?path:info,Th().ink,DT_LEFT,
+                 libraryTextMode);
+    }
+}
+void focusSearch(bool show) {
+    if(!searchEdit) return;
+    if(show) {
+        MoveWindow(searchEdit,g_offX+S(154),g_offY+S(293),S(251),S(16),TRUE);
+        int pixels=max(8,S(12));
+        if(pixels!=fontPixels) {
+            HFONT next=CreateFontW(-pixels,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,0,0,0,0,L"Microsoft YaHei UI");
+            SendMessageW(searchEdit,WM_SETFONT,(WPARAM)next,TRUE);
+            if(panelFont) DeleteObject(panelFont);
+            panelFont=next;fontPixels=pixels;
+        }
+        ShowWindow(searchEdit,SW_SHOW);SetFocus(searchEdit);
+        SendMessageW(searchEdit,EM_SETSEL,0,-1);
+    } else {ShowWindow(searchEdit,SW_HIDE);SetFocus(g_app.hwnd);}
+}
+void moveCursor(int delta) {
+    if(!matches.empty()) cursor=std::clamp(cursor+delta,0,(int)matches.size()-1);
+}
+void playCursor() { if(!matches.empty()) OpenMusic(g_app.playlist[matches[cursor]]); }
 void PaintScene(HDC dc) {
     SetBkMode(dc, TRANSPARENT);
     PaintBackdrop(dc);
@@ -984,11 +1191,28 @@ void PaintScene(HDC dc) {
     PaintFrame(dc);
     PaintSpectrum(dc);
     PaintTitle(dc);
-    PaintInfo(dc);
-    PaintExit(dc);
-    PaintGrid(dc);
-    PaintSelectionStripe(dc);
-    PaintHints(dc);
+    if(page==Page::System) settingsPaint(dc);
+    else if(page==Page::Library) archivePaint(dc);
+    else {
+        PaintInfo(dc);
+        PaintExit(dc);
+        PaintGrid(dc);
+        PaintSelectionStripe(dc);
+        PaintHints(dc);
+    }
+    channelRail(dc);
+    if(hoverChannel>=0) {
+        const wchar_t* hints[]={tr(L"F1   Original jukebox",L"F1   原版点唱机",L"F1   原版ジュークボックス"),
+            tr(L"F2   Local archive",L"F2   本地曲库",L"F2   ローカル音楽庫"),
+            tr(L"F3   System settings",L"F3   系统设置",L"F3   システム設定")};
+        panelBox(dc,144,462,495,478,Th().outer);
+        lineText(dc,154,462,486,478,hints[hoverChannel],Th().digit,DT_RIGHT);
+    }
+    unsigned age=g_app.tick-switchedAt;
+    if(switchedAt && age<12) {
+        int y=290+int(age)*14;
+        panelBox(dc,150,y,490,y+1,Th().frame);
+    }
     // entrance: near-black tint (packed 0x100408) fading out over the first
     // 32 frames via fullscreen quad alpha clamp(8*n32,0,255).  The original
     // also has a late white flash (tex 290, mode 14) not reproduced here.
@@ -1022,13 +1246,76 @@ void OnPaint(HWND hwnd) {
 void OnTimer(HWND hwnd) {
     PlayerApp& app = g_app;
     if (app.audio.isMci()) app.audio.poll();
+    if(tagReader.changed() && !query.empty())refreshIndex();
+    if(app.current==kTrackCount && !app.loading && app.audio.finished()) {
+        int count=(int)app.playlist.size(), next=app.localIndex+1;
+        if(localOrder==RepeatAll && count) next%=count;
+        if(localOrder==Shuffle && count) {
+            static std::mt19937 rng{std::random_device{}()};
+            next=count<2?0:(app.localIndex+std::uniform_int_distribution<int>(1,count-1)(rng))%count;
+        }
+        StopPlayback();
+        if(next>=0 && next<count) OpenMusic(app.playlist[next]);
+    }
     UpdateVisualization();
     ++app.tick;
     InvalidateRect(hwnd, NULL, FALSE);
 }
 
+constexpr UINT kLibraryCommand = 0x120;
+constexpr UINT kIntegerScaleCommand = 20;
+void selectPage(HWND hwnd, Page next) {
+    if(page==next) return;
+    if(draggingSeek){ReleaseCapture();draggingSeek=false;}
+    if(next==Page::System) returnPage=page;
+    page=next; switchedAt=g_app.tick;
+    focusSearch(false);
+    if(page==Page::Library) refreshIndex();
+    InvalidateRect(hwnd,nullptr,FALSE);
+}
+void OpenLibrary(HWND hwnd) {selectPage(hwnd,page==Page::Library?Page::Tracks:Page::Library);}
+void toggleIntegerScale(HWND hwnd) {
+    g_app.settings->scaleMode = g_app.settings->scaleMode ? 0 : 1;
+    InvalidateRect(hwnd,nullptr,FALSE);
+}
+void adjustSetting(int direction) {
+    if(settingRow==0) SetVolume(g_app.settings->volume+direction*5);
+    else if(settingRow==1) {
+        g_themeIdx=(g_themeIdx+direction+kThemeCount)%kThemeCount;
+        g_app.settings->theme=g_themeIdx;
+        RefreshTitle();
+    } else if(settingRow==2) lib::cycleLanguage(direction);
+    else g_app.settings->libFont=(g_app.settings->libFont+direction+2)%2;
+}
+
 void OnKeyDown(HWND hwnd, WPARAM key) {
     PlayerApp& app = g_app;
+    if(key==VK_F6) {toggleIntegerScale(hwnd);return;}
+    if(key>=VK_F1 && key<=VK_F3) {selectPage(hwnd,Page(key-VK_F1));return;}
+    if(page==Page::System) {
+        switch(key) {
+            case VK_UP: settingRow=(settingRow+kSettingCount-1)%kSettingCount;return;
+            case VK_DOWN: settingRow=(settingRow+1)%kSettingCount;return;
+            case VK_LEFT: adjustSetting(-1);return;
+            case VK_RETURN: case VK_RIGHT: adjustSetting(1);return;
+            case VK_ESCAPE: selectPage(hwnd,returnPage);return;
+            case VK_SPACE: return;
+        }
+    }
+    if(page==Page::Library) {
+        switch(key) {
+            case VK_UP: moveCursor(-1); return;
+            case VK_DOWN: moveCursor(1); return;
+            case VK_PRIOR: moveCursor(-rows); return;
+            case VK_NEXT: moveCursor(rows); return;
+            case VK_RETURN: playCursor(); return;
+            case VK_SPACE: if(app.current==kTrackCount)app.audio.togglePause();else playCursor();return;
+            case VK_LEFT: case VK_RIGHT:
+                if(app.current==kTrackCount) app.audio.seek(app.audio.positionSeconds()+(key==VK_LEFT?-5:5));return;
+            case VK_OEM_2: focusSearch(true); return;
+            case VK_ESCAPE: OpenLibrary(hwnd); return;
+        }
+    }
     switch (key) {
         case VK_LEFT:  MoveSelection(-1, 0); break;
         case VK_RIGHT: MoveSelection(1, 0); break;
@@ -1039,6 +1326,10 @@ void OnKeyDown(HWND hwnd, WPARAM key) {
             if (app.selected == kExitIndex) PostMessageA(hwnd, WM_CLOSE, 0, 0);
             else StartTrack(app.selected);
             break;
+        case 'L':
+            if (GetKeyState(VK_CONTROL) & 0x8000)
+                OpenLibrary(hwnd);
+            break;
         case 'O':
             if (GetKeyState(VK_CONTROL) & 0x8000) ChooseMusic(hwnd);
             break;
@@ -1046,7 +1337,7 @@ void OnKeyDown(HWND hwnd, WPARAM key) {
         case 'N': case VK_NEXT:  StepLocal(+1); break;
         case 'P': case VK_PRIOR: StepLocal(-1); break;
         case 'C': case 'T':
-            g_themeIdx = (g_themeIdx + 1) % kThemeCount;
+            g_themeIdx = app.settings->theme = (g_themeIdx + 1) % kThemeCount;
             RefreshTitle();
             InvalidateRect(hwnd, NULL, FALSE);
             break;
@@ -1067,6 +1358,40 @@ void OnKeyDown(HWND hwnd, WPARAM key) {
 void OnMouseDown(HWND hwnd, int x, int y, bool dbl) {
     PlayerApp& app = g_app;
     x -= g_offX; y -= g_offY;   // client -> backbuffer (letterbox) coords
+    int lx=(int)floor(x/g_scale),ly=(int)floor(y/g_scale);
+    if(ly>=272 && ly<288 && lx>=railX && lx<railX+3*channelWidth) {
+        selectPage(hwnd,Page((lx-railX)/channelWidth));
+        return;
+    }
+    if(page==Page::System) {
+        if(lx>=154 && lx<486 && ly>=kSettingY0 &&
+           ly<kSettingY0+kSettingCount*kSettingPitch+5) {
+            settingRow=std::clamp((ly-kSettingY0)/kSettingPitch,0,kSettingCount-1);
+            if(lx>=268 && lx<296) adjustSetting(-1);
+            if(lx>=461) adjustSetting(1);
+        }
+        return;
+    }
+    if(page==Page::Library) {
+        if(ly>=293 && ly<309 && lx>=154 && lx<405) { focusSearch(true); return; }
+        focusSearch(false);
+        if(ly>=263 && ly<272 && lx>=154 && lx<486 && app.current==kTrackCount) {
+            draggingSeek=true;dragFraction=(lx-154)/332.;SetCapture(hwnd);return;
+        }
+        if(ly>=293 && ly<309 && lx>=406 && lx<486) ChooseMusic(hwnd,false);
+        if(ly>=313 && ly<439 && lx>=154 && lx<486) {
+            int i=cursor/rows*rows+(ly-313)/18;
+            if(i<(int)matches.size()) {cursor=i;if(dbl) playCursor();}
+        }
+        if(ly>=443 && ly<460) {
+            if(lx>=154 && lx<212) changeOrder();
+            if(lx>=213 && lx<277) {if(app.current==kTrackCount)app.audio.togglePause();else playCursor();}
+            if(lx>=278 && lx<331) StopPlayback();
+            if(lx>=341 && lx<375) moveCursor(-rows);
+            if(lx>=453 && lx<486) moveCursor(rows);
+        }
+        return;
+    }
     RECT ex;
     ex.left = S(156); ex.top = S(272);
     ex.right = S(212); ex.bottom = S(288);
@@ -1087,9 +1412,77 @@ void OnMouseDown(HWND hwnd, int x, int y, bool dbl) {
     }
 }
 
+void catalogAction(HWND hwnd,int action) {
+    auto& a=g_app;auto& list=a.playlist;
+    if(action==1) {for(auto& path:catalog::folder(hwnd))AddLocal(path);refreshIndex();return;}
+    if(matches.empty())return;
+    int idx=matches[cursor],prev=cursor;
+    std::wstring picked=list[idx],playing=a.localIndex>=0 && a.localIndex<(int)list.size()?list[a.localIndex]:L"";
+    switch(action) {
+        case 2: // Remove only the entry, never the underlying audio file.
+            if(a.current==kTrackCount && idx==a.localIndex)StopPlayback();
+            list.erase(list.begin()+idx);break;
+        case 3: case 4: {
+            int dest=idx+(action==3?-1:1);
+            if(dest<0 || dest>=(int)list.size())return;
+            std::swap(list[idx],list[dest]);break;
+        }
+        case 5:
+            std::stable_sort(list.begin(),list.end(),[](const auto& x,const auto& y){
+                return StrCmpLogicalW(basenameW(x).c_str(),basenameW(y).c_str())<0;
+            });break;
+    }
+    auto active=std::find(list.begin(),list.end(),playing);
+    a.localIndex=active==list.end()?-1:int(active-list.begin());
+    refreshIndex();
+    cursor=matches.empty()?0:std::min(prev,(int)matches.size()-1);
+    for(int i=0;i<(int)matches.size();++i)
+        if(list[matches[i]]==picked){cursor=i;break;}
+}
+void popup(HWND hwnd,LPARAM coords) {
+    POINT pt={(short)LOWORD(coords),(short)HIWORD(coords)};
+    if(pt.x==-1 && pt.y==-1) {pt={g_offX+S(360),g_offY+S(280)};ClientToScreen(hwnd,&pt);}
+    else if(page==Page::Library) {
+        POINT client=pt;ScreenToClient(hwnd,&client);
+        int x=(int)floor((client.x-g_offX)/g_scale),y=(int)floor((client.y-g_offY)/g_scale);
+        int item=(cursor/rows)*rows+(y-313)/18;
+        if(x>=154 && x<486 && y>=313 && y<439 && item<(int)matches.size())cursor=item;
+    }
+    HMENU m=CreatePopupMenu();if(!m)return;
+    const wchar_t* name[]={tr(L"TR   Memoirs\tF1",L"TR   原版点唱机\tF1",L"TR   ジュークボックス\tF1"),
+        tr(L"LIB   Library\tF2",L"LIB   本地曲库\tF2",L"LIB   音楽庫\tF2"),
+        tr(L"SYS   Settings\tF3",L"SYS   设置\tF3",L"SYS   設定\tF3")};
+    for(int i=0;i<3;++i)AppendMenuW(m,MF_STRING|(i==int(page)?MF_CHECKED:0),10+i,name[i]);
+    AppendMenuW(m,MF_SEPARATOR,0,nullptr);
+    AppendMenuW(m,MF_STRING|(g_app.settings->scaleMode?MF_CHECKED:0),
+                 kIntegerScaleCommand,
+                 tr(L"Integer scaling\tF6",L"整数倍缩放\tF6",L"整数倍拡大\tF6"));
+    if(page==Page::Library) {
+        AppendMenuW(m,MF_SEPARATOR,0,nullptr);
+        AppendMenuW(m,MF_STRING,1,tr(L"Import folder...",L"导入文件夹…",L"フォルダーを追加…"));
+        UINT flags=MF_STRING|(matches.empty()?MF_GRAYED:0);
+        AppendMenuW(m,flags,2,tr(L"Remove from library",L"从曲库移除",L"リストから除外"));
+        AppendMenuW(m,flags,3,tr(L"Move earlier",L"向前移动",L"前に移動"));
+        AppendMenuW(m,flags,4,tr(L"Move later",L"向后移动",L"後ろに移動"));
+        AppendMenuW(m,flags,5,tr(L"Sort by filename",L"按文件名排序",L"ファイル名順"));
+    }
+    int cmd=TrackPopupMenu(m,TPM_RETURNCMD|TPM_RIGHTBUTTON,pt.x,pt.y,0,hwnd,nullptr);
+    DestroyMenu(m);
+    if(cmd>=10 && cmd<=12)selectPage(hwnd,Page(cmd-10));
+    else if(cmd==int(kIntegerScaleCommand))toggleIntegerScale(hwnd);
+    else if(cmd>0)catalogAction(hwnd,cmd);
+}
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     PlayerApp& app = g_app;
+    if (msg == WM_MOUSEMOVE || msg == WM_MOUSEWHEEL || msg == WM_KEYDOWN ||
+        msg == WM_LBUTTONDOWN || msg == WM_LBUTTONDBLCLK ||
+        msg == WM_CONTEXTMENU || msg == WM_SIZE || msg == WM_DROPFILES) {
+        noteRailActivity();
+    }
     switch (msg) {
+        case WM_SYSCOMMAND:
+            if ((wParam & 0xfff0) == kLibraryCommand) { OpenLibrary(hwnd); return 0; }
+            break;
         case WM_DROPFILES: {
             HDROP drop = reinterpret_cast<HDROP>(wParam);
             UINT n = DragQueryFileW(drop, 0xFFFFFFFF, NULL, 0);
@@ -1104,17 +1497,71 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 }
             }
             DragFinish(drop);
+            refreshIndex();
             if (playIdx >= 0) OpenMusic(app.playlist[playIdx]);
             return 0;
         }
+        case WM_CTLCOLOREDIT:
+            if ((HWND)lParam == searchEdit) {
+                auto dc = (HDC)wParam;
+                SetTextColor(dc, Th().ink);
+                SetBkColor(dc, Th().stripHot);
+                SetDCBrushColor(dc, Th().stripHot);
+                return (LRESULT)GetStockObject(DC_BRUSH);
+            }
+            break;
+        case WM_COMMAND:
+            if (LOWORD(wParam) == kIntegerScaleCommand) {
+                toggleIntegerScale(hwnd);
+                return 0;
+            }
+            if(searchEdit && (HWND)lParam==searchEdit && HIWORD(wParam)==EN_CHANGE) {
+                std::wstring buf(GetWindowTextLengthW(searchEdit)+1,L'\0');
+                buf.resize(GetWindowTextW(searchEdit,buf.data(),(int)buf.size()));query=buf;refreshIndex();
+            }
+            return 0;
+        case WM_MOUSEMOVE: {
+            int x=(int)floor(((short)LOWORD(lParam)-g_offX)/g_scale);
+            int y=(int)floor(((short)HIWORD(lParam)-g_offY)/g_scale);
+            if(draggingSeek)dragFraction=std::clamp((x-154)/332.,0.,1.);
+            int channel=(y>=272 && y<288 && x>=railX && x<railX+3*channelWidth)?(x-railX)/channelWidth:-1;
+            if(channel>=0) {
+                SetCursor(LoadCursorW(nullptr,MAKEINTRESOURCEW(32649)));
+                if(hoverChannel<0) {
+                    TRACKMOUSEEVENT track={sizeof(track),TME_LEAVE,hwnd,0};TrackMouseEvent(&track);
+                }
+            }
+            hoverChannel=channel;
+            return 0;
+        }
+        case WM_CONTEXTMENU: popup(hwnd,lParam);return 0;
+        case WM_MOUSELEAVE: hoverChannel=-1; return 0;
+        case WM_MOUSEWHEEL:
+            if(page==Page::Library) moveCursor(GET_WHEEL_DELTA_WPARAM(wParam)>0?-1:1);
+            return 0;
         case WM_SIZE: InvalidateRect(hwnd, NULL, FALSE); return 0;
         case WM_ERASEBKGND: return 1;
         case WM_PAINT: OnPaint(hwnd); return 0;
         case WM_TIMER: OnTimer(hwnd); return 0;
         case WM_KEYDOWN: OnKeyDown(hwnd, wParam); return 0;
+        case WM_CAPTURECHANGED: draggingSeek=false;return 0;
+        case WM_LBUTTONUP:
+            if(draggingSeek) {
+                dragFraction=std::clamp((((short)LOWORD(lParam)-g_offX)/g_scale-154)/332.,0.,1.);
+                draggingSeek=false;ReleaseCapture();
+                if(app.current==kTrackCount)app.audio.seek(app.audio.durationSeconds()*dragFraction);
+            }
+            return 0;
         case WM_LBUTTONDOWN: OnMouseDown(hwnd, LOWORD(lParam), HIWORD(lParam), false); return 0;
         case WM_LBUTTONDBLCLK: OnMouseDown(hwnd, LOWORD(lParam), HIWORD(lParam), true); return 0;
         case WM_DESTROY:
+            {
+                int selected=matches.empty()?loadedSelection:matches[cursor];
+                if(selected<0 || selected>=(int)app.playlist.size())selected=-1;
+                if(app.playlist!=loadedPaths || localOrder!=loadedOrder || (!app.playlist.empty() && selected!=loadedSelection))
+                    catalog::save(app.playlist,selected,localOrder);
+            }
+            if(panelFont) DeleteObject(panelFont);
             KillTimer(hwnd, 1);
             app.audio.shutdown();
             if (app.backBmp) DeleteObject(app.backBmp);
@@ -1131,6 +1578,7 @@ int RunPlayerWindow(Resolver& resolver, PlayerSettings& settings, std::string& e
     PlayerApp& app = g_app;
     app.resolver = &resolver;
     app.settings = &settings;
+    g_themeIdx=std::clamp(settings.theme,0,kThemeCount-1);
     app.selected = 0;
     app.current = -1;
     for (int i = 0; i < kTrackCount; ++i) {
@@ -1140,6 +1588,7 @@ int RunPlayerWindow(Resolver& resolver, PlayerSettings& settings, std::string& e
 
     WNDCLASSA wc;
     memset(&wc, 0, sizeof(wc));
+    wc.style = CS_DBLCLKS;
     wc.lpfnWndProc = WndProc;
     wc.hInstance = GetModuleHandleA(0);
     wc.hCursor = LoadCursorA(0, IDC_ARROW);
@@ -1149,7 +1598,7 @@ int RunPlayerWindow(Resolver& resolver, PlayerSettings& settings, std::string& e
 
     // Resizable / maximizable: the scene scale follows the client area so the
     // vector UI grows proportionally with resolution and stays crisp.
-    const DWORD style = WS_OVERLAPPEDWINDOW;
+    const DWORD style = WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN;
     RECT rc = { 0, 0, 1280, 960 };
     AdjustWindowRect(&rc, style, FALSE);
     HWND hwnd = CreateWindowExA(WS_EX_APPWINDOW, wc.lpszClassName, "SOUND MEMOIRS",
@@ -1162,6 +1611,18 @@ int RunPlayerWindow(Resolver& resolver, PlayerSettings& settings, std::string& e
         return 1;
     }
     app.hwnd = hwnd;
+    int restored=-1;
+    catalog::load(app.playlist,restored,localOrder);
+    localOrder=std::clamp(localOrder,0,3);
+    loadedOrder=localOrder;loadedSelection=restored;loadedPaths=app.playlist;
+    for(auto& path:app.playlist)tagReader.enqueue(path);
+    refreshIndex();
+    if(restored>=0 && restored<(int)matches.size())cursor=restored;
+    searchEdit=CreateWindowExW(0,L"EDIT",L"",WS_CHILD|ES_AUTOHSCROLL,0,0,0,0,hwnd,nullptr,GetModuleHandleW(nullptr),nullptr);
+    if (HMENU menu = GetSystemMenu(hwnd, FALSE)) {
+        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(menu, MF_STRING, kLibraryCommand, L"Music Library / 曲库\tCtrl+L");
+    }
     DragAcceptFiles(hwnd, TRUE);
     ShowWindow(hwnd, SW_SHOW);
     UpdateWindow(hwnd);
@@ -1179,9 +1640,17 @@ int RunPlayerWindow(Resolver& resolver, PlayerSettings& settings, std::string& e
     }
 
     MSG msg;
-    while (GetMessageA(&msg, 0, 0, 0) > 0) {
+    while (GetMessageW(&msg, 0, 0, 0) > 0) {
+        if(msg.hwnd==searchEdit && msg.message==WM_KEYDOWN) {
+            noteRailActivity();
+            if(msg.wParam>=VK_F1 && msg.wParam<=VK_F3) {selectPage(hwnd,Page(msg.wParam-VK_F1));continue;}
+            if(msg.wParam==VK_ESCAPE || msg.wParam==VK_RETURN || msg.wParam==VK_DOWN) {
+                focusSearch(false); continue;
+            }
+            if(msg.wParam=='L' && GetKeyState(VK_CONTROL)<0) {OpenLibrary(hwnd);continue;}
+        }
         TranslateMessage(&msg);
-        DispatchMessageA(&msg);
+        DispatchMessageW(&msg);
     }
     timeEndPeriod(1);
     return 0;

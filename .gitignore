@@ -8,6 +8,7 @@ dist/
 
 # runtime config (per-user, contains local game path)
 hsbgm.ini
+hsbgm.catalog*
 
 # generated extras (only cells_<i>.bmp is embedded by src/memoirs.rc)
 assets/themed/title_*.bmp
