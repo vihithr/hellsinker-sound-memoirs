@@ -77,6 +77,8 @@ function libPlayCursor(){
 }
 let lang=0; // 0=EN, 1=ZH, 2=JA
 let playlist=[],localIndex=-1,localOrder=0; // 0 sequential, 1 repeat-one, 2 repeat-all, 3 shuffle
+const localFiles=new Map();  // norm(name) -> File, for browser-native decoding
+const fileKey=s=>s.toLowerCase().replaceAll("/","\\");
 let scrubbing=false,scrubFraction=0,next=0,fatal=null,ready=false;
 const THEMES=["ORIGINAL","DARK","NEON","PAPER","BLUEPRINT"];
 const LAYOUTS=["ORIGINAL","FIELD","STACK","RING","CROSS"];
@@ -128,14 +130,38 @@ async function activate(){
     await context.resume();if(id!==epoch)return;
     if(buffer&&current===target){loading=false;start();refreshTitle();return;}
     detach();buffer=null;current=null;offset=0;loading=true;refreshTitle();
-    const {pcm}=await request("decode",{key:target<names.length?{name:names[target]}:{local:locals[target-names.length]}});
+    const {pcm,native}=await request("decode",{key:target<names.length?{name:names[target]}:{local:locals[target-names.length]}});
     if(id!==epoch)return;
+    if(native){
+      // MP3/FLAC/M4A/... : decode with the platform decoder, then normalize
+      // to 44.1 kHz stereo so the shared spectrum/visual-cursor code keeps
+      // its desktop-identical timing assumptions.
+      const key=fileKey(locals[target-names.length]);
+      const file=localFiles.get(key);
+      if(!file)throw Error("找不到本地文件");
+      buffer=await decodeBrowser(file);
+      current=target;loading=false;refreshTitle();start();
+      return;
+    }
     const b=context.createBuffer(2,pcm.length/2,44100);
     for(let c=0;c<2;c++){const out=b.getChannelData(c);for(let i=0;i<out.length;i++)out[i]=pcm[2*i+c]/32768;}
     buffer=b;current=target;loading=false;refreshTitle();start();
   }catch(e){if(id===epoch){reset();}}
 }
 function seek(seconds){if(!buffer)return;offset=Math.max(0,Math.min(buffer.duration,seconds));if(source)start();}
+// Decode a browser-supported container (MP3/AAC/M4A/FLAC/Opus/...) and
+// normalize it to 44.1 kHz stereo, the format the shared C++ spectrum and
+// visual cursor assume.
+async function decodeBrowser(file){
+  const bytes=await file.arrayBuffer();
+  const decoded=await context.decodeAudioData(bytes);
+  if(decoded.sampleRate===44100&&decoded.numberOfChannels>=2) return decoded;
+  const frames=Math.ceil(decoded.duration*44100);
+  const off=new OfflineAudioContext(2,frames,44100);
+  const src=off.createBufferSource();
+  src.buffer=decoded;src.connect(off.destination);src.start();
+  return await off.startRendering();
+}
 // Quick pause/resume for touch users: toggles whatever is currently playing.
 function togglePause(){
   if(current===null||!buffer)return false;
@@ -295,6 +321,9 @@ window.addEventListener("keydown",e=>{
 async function importFiles(picked){
   if(!picked||!picked.length)return;
   loading=true;refreshTitle();
+  // Keep the File handles on the main thread: browser-native formats are
+  // decoded here (the worker has no AudioContext).
+  for(const f of picked) localFiles.set(fileKey(f.name), f);
   try{
     const result=await request("import",{files:picked,names});
     available=result.available;locals=result.locals||[];playlist=locals.slice();

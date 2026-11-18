@@ -4,6 +4,11 @@ const HEADER = 0x203a4;
 const text = new TextDecoder();
 const slots = ["bbll.pak","bbt3.pak","bbt2.pak","bbt.pak"];
 const indexes = new Map(), loose = new Map();
+// OGG/WAV are decoded by the shared C++ core (same path as the desktop).
+// Everything else is handed to the browser's decodeAudioData on the main
+// thread, which covers MP3/AAC/M4A/FLAC/Opus and friends for free.
+const CORE_EXT = /\.(ogg|wav)$/;
+const NATIVE_EXT = /\.(mp3|m4a|aac|flac|opus|oga|webm|weba|wma|aiff|aif|mp4)$/;
 const norm = s => s.toLowerCase().replaceAll("/", "\\");
 function locate(name) {
   name = norm(name);
@@ -19,7 +24,7 @@ function locate(name) {
 async function ingest(core,file) {
   const key=norm(file.name);
   if(!slots.includes(key)) {
-    if(!/\.(ogg|wav)$/.test(key)) throw Error("不支持："+file.name);
+    if(!CORE_EXT.test(key) && !NATIVE_EXT.test(key)) throw Error("不支持："+file.name);
     loose.set(key,file);return;
   }
   if(file.size>0xffffffff) throw Error("当前 PAK 格式不支持超过 4 GiB 的文件");
@@ -53,6 +58,12 @@ async function handle({id,op,files,names,key}) {
     }
     const file=key.local?loose.get(key.local):locate(key.name);
     if(!file) throw Error("未载入此曲目");
+    // Leave browser-native formats (MP3/FLAC/M4A/...) to the main thread,
+    // which has an AudioContext. The worker only owns the C++ decoder.
+    const fileName=norm(key.local||key.name||"");
+    if(key.local && NATIVE_EXT.test(fileName)) {
+      return postMessage({id,native:true,local:key.local});
+    }
     if(file.size>96*1024*1024) throw Error("当前版本单曲输入上限 96 MiB");
     const bytes=new Uint8Array(await file.arrayBuffer()), ptr=core._alloc(bytes.length);
     if(!ptr) throw Error("内存不足");
