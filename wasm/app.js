@@ -1,16 +1,37 @@
 import factory from "./core/core.js";
 import {createScene} from "./scene.js";
 const $=id=>document.getElementById(id);
-const screen=$("screen"), files=$("files");
+const screen=$("screen"), files=$("files"), aux=$("aux");
+let auxTimer=0;
+function wakeAux(){
+  aux.classList.add("visible");
+  clearTimeout(auxTimer);
+  auxTimer=setTimeout(()=>aux.classList.remove("visible"),2500);
+}
+function toggleFullscreen(){
+  try{
+    if(document.fullscreenElement){document.exitFullscreen();}
+    else{document.documentElement.requestFullscreen?.();}
+  }catch(e){}
+  wakeAux();
+}
+$("aux-load")?.addEventListener("click",()=>{files.click();wakeAux();});
+$("aux-full")?.addEventListener("click",toggleFullscreen);
 
 // ---- state (mirrors the desktop PlayerApp subset the replica needs) --------
 let names=[],locals=[],available=[],selected=0,current=null;
 let context=null,buffer=null,source=null,gain=null,vizCore=null,vizPtr=0,statePtr=0,stateView=null;
 let offset=0,started=0,epoch=0,loading=false,theme=0,volume=80,stageMode=0,wingMode=0,layoutMode=0;
 let tick=0,paused=false,railActivityTick=0,switchTick=0,showGridOverlay=false;
+let page=0; // 0=TR, 1=LIB, 2=SYS
+let settingRow=0,libFont=1;
+let libCursor=0,libScroll=0,searchText="",searchActive=false;
+function clampLibScroll(){if(libCursor<libScroll)libScroll=libCursor;if(libCursor>=libScroll+7)libScroll=libCursor-6;libScroll=Math.max(0,libScroll);}
+let lang=0; // 0=EN, 1=ZH, 2=JA
 let playlist=[],localIndex=-1,localOrder=0; // 0 sequential, 1 repeat-one, 2 repeat-all, 3 shuffle
 let scrubbing=false,scrubFraction=0,next=0,fatal=null,ready=false;
 const THEMES=["ORIGINAL","DARK","NEON","PAPER","BLUEPRINT"];
+const LAYOUTS=["ORIGINAL","FIELD","STACK","RING","CROSS"];
 const ORDERS=["ORDER","ONE","LOOP","SHUFFLE"];
 const pending=new Map(),worker=new Worker("./worker.js",{type:"module"});
 
@@ -26,7 +47,7 @@ function refreshTitle(){
   const t=THEMES[theme];
   document.title=`SOUND MEMOIRS  [VOL ${volume}] [${t}]`+(loading?"  [LOADING]":"");
 }
-function markRailActivity(){railActivityTick=tick;}
+function markRailActivity(){railActivityTick=tick;wakeAux();}
 function switchPage(){switchTick=tick;}
 
 // ---- playback -------------------------------------------------------------
@@ -85,6 +106,26 @@ function cycleTheme(){theme=(theme+1)%THEMES.length;refreshTitle();markRailActiv
 function cycleStage(){stageMode=(stageMode+1)%4;markRailActivity();}
 function cycleWing(){wingMode=(wingMode+1)%5;markRailActivity();}
 function cycleLayout(){layoutMode=(layoutMode+1)%5;showGridOverlay=false;markRailActivity();}
+function selectPage(p){page=p;switchTick=tick;markRailActivity();}
+function adjustSetting(direction){
+  switch(settingRow){
+    case 0: setVolume(volume+direction*5); break;
+    case 1: theme=(theme+(direction>0?1:4))%5; refreshTitle(); break;
+    case 2: lang=(lang+(direction>0?1:2))%3; loadFontForLang(); refreshTitle(); break;
+    case 3: libFont=libFont?0:1; break;
+    case 4: cycleLayout(); break;
+  }
+  markRailActivity();
+}
+
+// Load the matching CJK web font when the language needs one (ZH/JA).
+async function loadFontForLang(){
+  const name=lang===2?"fusion-ja":"fusion-zh";
+  try{
+    const font=new FontFace("FusionPixel",`url(assets/fonts/${name}.woff2)`);
+    await font.load();document.fonts.add(font);
+  }catch(e){}
+}
 
 function moveSelection(dcol,drow){
   if(selected>=names.length)return;
@@ -110,6 +151,20 @@ function hitTrack(x,y){
 function hitExit(x,y){return x>=156&&x<212&&y>=272&&y<288;}
 screen.addEventListener("click",e=>{
   const {x,y}=canvasPoint(e);
+  if(page===1){ // LIB
+    if(y>=293&&y<309){files.click();return;}
+    if(y>=313&&y<439){const row=Math.floor((y-313)/18);const idx=libScroll+row;if(idx>=0&&idx<playlist.length){libCursor=idx;markRailActivity();}return;}
+    if(y>=443&&y<460){
+      if(x>=154&&x<212){localOrder=(localOrder+1)%4;markRailActivity();return;}
+      if(x>=213&&x<277){if(buffer&&current!==null&&current>=names.length){offset=position();detach();paused=!paused;if(!paused)start();}return;}
+      if(x>=278&&x<331){stop();return;}
+    }
+    return;
+  }
+  if(page===2){ // SYS
+    if(y>=283&&y<438){const row=Math.floor((y-283)/31);if(row>=0&&row<5){settingRow=row;if(x>=269&&x<296)adjustSetting(-1);else if(x>=462&&x<486)adjustSetting(1);markRailActivity();}return;}
+    return;
+  }
   if(hitExit(x,y)){stop();return;}
   const i=hitTrack(x,y);if(i!==null){select(i);activate();}
 });
@@ -120,8 +175,37 @@ screen.addEventListener("dblclick",e=>{
 screen.addEventListener("pointerdown",()=>{screen.focus();markRailActivity();});
 window.addEventListener("keydown",e=>{
   const k=e.key;
-  if((e.ctrlKey||e.metaKey)&&(k==="o"||k==="O")){e.preventDefault();files.click();return;}
-  if((e.ctrlKey||e.metaKey)&&(k==="q"||k==="Q")){e.preventDefault();stop();return;}
+  if(e.altKey&&k==="Enter"){e.preventDefault();toggleFullscreen();return;}
+  if(e.ctrlKey||e.metaKey){
+    if(k==="o"||k==="O"){e.preventDefault();files.click();return;}
+    if(k==="q"||k==="Q"){e.preventDefault();stop();return;}
+    if(k==="l"||k==="L"){e.preventDefault();selectPage(page===1?0:1);return;}
+  }
+  if(k==="F1"||k==="F2"||k==="F3"){e.preventDefault();selectPage(k==="F1"?0:k==="F2"?1:2);return;}
+  if(page===1){ // LIB navigation
+    if(k==="ArrowUp"){e.preventDefault();libCursor=Math.max(0,libCursor-1);clampLibScroll();markRailActivity();return;}
+    if(k==="ArrowDown"){e.preventDefault();libCursor=Math.min(playlist.length-1,libCursor+1);clampLibScroll();markRailActivity();return;}
+    if(k==="PageUp"){e.preventDefault();libCursor=Math.max(0,libCursor-7);clampLibScroll();return;}
+    if(k==="PageDown"){e.preventDefault();libCursor=Math.min(playlist.length-1,libCursor+7);clampLibScroll();return;}
+    if(k==="Enter"){e.preventDefault();if(playlist.length){localIndex=libCursor;selected=names.length+libCursor;activate();}return;}
+    if(k===" "){e.preventDefault();if(buffer&&current!==null&&current>=names.length){offset=position();detach();paused=!paused;if(!paused)start();}return;}
+    if(k==="ArrowLeft"||k==="ArrowRight"){e.preventDefault();seek(position()+(k==="ArrowLeft"?-5:5));return;}
+    if(k==="/"){e.preventDefault();searchText="";searchActive=true;return;}
+    if(searchActive&&k.length===1){searchText+=k;markRailActivity();return;}
+    if(k==="Backspace"&&searchActive){e.preventDefault();searchText=searchText.slice(0,-1);return;}
+    if(k==="Escape"){e.preventDefault();searchActive=false;selectPage(0);return;}
+    return;
+  }
+  if(page===2){ // SYS navigation
+    if(k==="ArrowUp"){e.preventDefault();settingRow=(settingRow+4)%5;markRailActivity();return;}
+    if(k==="ArrowDown"){e.preventDefault();settingRow=(settingRow+1)%5;markRailActivity();return;}
+    if(k==="ArrowLeft"){e.preventDefault();adjustSetting(-1);return;}
+    if(k==="ArrowRight"||k==="Enter"){e.preventDefault();adjustSetting(1);return;}
+    if(k==="Escape"){e.preventDefault();selectPage(0);return;}
+    if(k==="+"){e.preventDefault();adjustSetting(1);return;}
+    if(k==="-"){e.preventDefault();adjustSetting(-1);return;}
+    return;
+  }
   const d={ArrowRight:[1,0],ArrowLeft:[-1,0],ArrowDown:[0,1],ArrowUp:[0,-1]}[k];
   if(d){e.preventDefault();moveSelection(d[0],d[1]);return;}
   if(k==="Enter"||k===" "){e.preventDefault();if(selected<0){stop();}else activate();return;}
@@ -195,7 +279,7 @@ try{
       stateView.setInt32(2652,stageMode,true);
       stateView.setInt32(2656,wingMode,true);
       stateView.setInt32(2660,layoutMode,true);
-      stateView.setInt32(2664,0,true); // page: Tracks
+      stateView.setInt32(2664,page,true); // page: TR/LIB/SYS
       stateView.setInt32(2668,-1,true); // hoverChannel
       stateView.setFloat64(2672,seconds,true);
       stateView.setInt32(2680,current!==null&&current>=names.length?1:0,true);
@@ -204,6 +288,24 @@ try{
       stateView.setInt32(2720,switchTick,true);
       stateView.setInt32(2724,showGridOverlay?1:0,true);
       stateView.setFloat64(2728,buffer?buffer.duration:0,true);
+      // SYS / LIB shell fields (POD tail).
+      stateView.setInt32(2736,lang,true);                    // language
+      stateView.setInt32(2740,volume,true);                  // volume
+      stateView.setInt32(2744,libFont,true);                 // libFont
+      stateView.setInt32(2748,settingRow,true);              // settingRow
+      // layoutName (2776..2839) as UTF-32
+      const lname=LAYOUTS[layoutMode]||"ORIGINAL";
+      for(let i=0;i<lname.length&&i<16;i++)stateView.setInt32(2776+i*4,lname.charCodeAt(i),true);
+      stateView.setInt32(2840,lname.length,true);            // layoutNameLen
+      // LIB page fields
+      stateView.setInt32(2752,libCursor,true);
+      stateView.setInt32(2756,libScroll,true);
+      stateView.setInt32(2760,localOrder,true);
+      stateView.setInt32(2764,paused?1:0,true);
+      stateView.setInt32(2768,current!==null&&current>=names.length?1:0,true);
+      stateView.setInt32(2772,Math.round(position()*1000),true);
+      for(let i=0;i<searchText.length&&i<32;i++)stateView.setInt32(2844+i*4,searchText.charCodeAt(i),true);
+      stateView.setInt32(2972,searchText.length,true);
 
       vizCore._scene_begin();
       vizCore._scene_set_state(statePtr);
@@ -215,7 +317,12 @@ try{
     }
     requestAnimationFrame(drawFrame);
   };
-  drawFrame();await request("init");ready=true;screen.focus();
+  // Optional deep-link: #sys / #lib selects the initial page (handy for tests).
+  const h=(location.hash||"").toLowerCase();
+  if(h.includes("sys"))page=2;else if(h.includes("lib"))page=1;
+  if(h.includes("settled"))tick=200; // skip entrance tint for deterministic capture
+  loadFontForLang();
+  drawFrame();await request("init");ready=true;screen.focus();wakeAux();
 }catch(e){
   document.title="SOUND MEMOIRS  [INIT FAILED]";
 }

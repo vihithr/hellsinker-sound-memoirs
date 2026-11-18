@@ -13,6 +13,7 @@
 //   gfx_capture_*     <- channelRail fade (BitBlt snapshot + AlphaBlend back)
 //   gfx_push/pop_clip  <- stage paint clip (SaveDC/IntersectClipRect/RestoreDC)
 #include "gfx.h"
+#include "panel_text.h"
 
 #include <cstring>
 
@@ -55,10 +56,42 @@ struct AtlasSet {
 
 AtlasSet g_atlas;
 
+// Original full artwork (title=102, axis=103), blitted 1:1 for the title.
+struct ImageSet {
+    HDC dc[2];
+    HBITMAP bmp[2];
+    bool built;
+    ImageSet() : built(false) { dc[0] = dc[1] = nullptr; bmp[0] = bmp[1] = nullptr; }
+    ~ImageSet() {
+        for (int i = 0; i < 2; ++i) {
+            if (dc[i]) DeleteDC(dc[i]);
+            if (bmp[i]) DeleteObject(bmp[i]);
+        }
+    }
+    void ensure() {
+        if (built) return;
+        for (int i = 0; i < 2; ++i) {
+            bmp[i] = LoadBitmapA(GetModuleHandleA(nullptr), MAKEINTRESOURCEA(102 + i));
+            if (!bmp[i]) continue;
+            dc[i] = CreateCompatibleDC(nullptr);
+            if (!dc[i]) { DeleteObject(bmp[i]); bmp[i] = nullptr; continue; }
+            SelectObject(dc[i], bmp[i]);
+        }
+        built = true;
+    }
+};
+ImageSet g_images;
+
 HDC atlasDC(int theme) {
     g_atlas.ensure();
     if (theme < 0 || theme > 4 || !g_atlas.dc[theme]) theme = 0;
     return g_atlas.dc[theme];
+}
+
+HDC imageDC(int which) {
+    g_images.ensure();
+    if (which < 0 || which > 1) return nullptr;
+    return g_images.dc[which];
 }
 
 // ---- rail fade snapshot (was channelRail's savedDC/savedBmp) --------------
@@ -163,7 +196,7 @@ void gfx_ellipse(int x0, int y0, int x1, int y1, COLORREF c) {
 
 void gfx_blit(int src, int sx, int sy, int sw, int sh, int dx, int dy,
               int dw, int dh) {
-    HDC atlas = atlasDC(src);
+    HDC atlas = src >= kGfxImageBase ? imageDC(src - kGfxImageBase) : atlasDC(src);
     if (!g_dc || !atlas) return;
     if (dw <= 0 || dh <= 0) { dw = sw; dh = sh; }
     SetStretchBltMode(g_dc, COLORONCOLOR);
@@ -209,8 +242,18 @@ void gfx_pop_clip() {
     RestoreDC(g_dc, g_clipSave[--g_clipDepth]);
 }
 
+void gfx_text(const std::uint32_t* cps, int count, int x, int y,
+              int right, int bottom, COLORREF color, std::uint8_t align) {
+    if (!g_dc) return;
+    RECT rect = { x, y, right, bottom };
+    DrawCodepointLine(g_dc, cps, count, rect, color, align);
+}
+
 // The command-buffer transport is a WASM-only concept; the GDI backend
 // executes immediately and reports nothing.
 const GfxCmd* gfx_commands() { return nullptr; }
 const GfxPoint* gfx_points() { return nullptr; }
 int gfx_count() { return 0; }
+const GfxTextCmd* gfx_texts() { return nullptr; }
+const std::uint32_t* gfx_text_points() { return nullptr; }
+int gfx_text_count() { return 0; }

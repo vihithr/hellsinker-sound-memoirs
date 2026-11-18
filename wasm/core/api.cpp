@@ -135,5 +135,14 @@ MEMOIRS_EXPORT const GfxPoint* scene_points() {
 MEMOIRS_EXPORT std::uint32_t scene_count() {
     return (std::uint32_t)gfx_count();
 }
+MEMOIRS_EXPORT const GfxTextCmd* scene_texts() {
+    return gfx_texts();
+}
+MEMOIRS_EXPORT const std::uint32_t* scene_text_points() {
+    return gfx_text_points();
+}
+MEMOIRS_EXPORT std::uint32_t scene_text_count() {
+    return (std::uint32_t)gfx_text_count();
+}
 
 } // extern "C"

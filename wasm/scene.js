@@ -18,6 +18,13 @@ export async function createScene(canvas, core) {
     return img;
   }));
 
+  // Original full artwork addressed by src >= kGfxImageBase (100):
+  //   100 = title.png (418x56), 101 = axis.png
+  const loadImage = async name => {
+    const img = new Image(); img.src = `assets/${name}.png`; await img.decode(); return img;
+  };
+  const images = { 100: await loadImage("title"), 101: await loadImage("axis") };
+
   // COLORREF is 0x00BBGGRR; CSS wants rgb(R,G,B).
   const css = c => `rgb(${c & 255},${(c >> 8) & 255},${(c >> 16) & 255})`;
 
@@ -111,8 +118,8 @@ export async function createScene(canvas, core) {
           // Shared gfx_blit carries destination size in the second point.
           // A {0,0} size falls back to the source cell size (revision-1 streams).
           const dw = px(po + 1) || x1, dh = py(po + 1) || y1;
-          ctx.drawImage(atlases[src] || atlases[0],
-                        x0, y0, x1, y1, px(po), py(po), dw, dh);
+          const source = src >= 100 ? (images[src] || images[100]) : (atlases[src] || atlases[0]);
+          ctx.drawImage(source, x0, y0, x1, y1, px(po), py(po), dw, dh);
           break;
         }
         case GFX_PUSH_CLIP:
@@ -126,6 +133,34 @@ export async function createScene(canvas, core) {
           break;
         default:
           throw new Error(`unknown GfxOp ${op} at command ${i}`);
+      }
+    }
+
+    // Unicode text commands (SYS/LIB pages), replayed with the CJK web font.
+    const tc = core._scene_text_count();
+    if (tc) {
+      const textsPtr = core._scene_texts() >>> 0;
+      const tpsPtr = core._scene_text_points() >>> 0;
+      const tdv = new DataView(heap.buffer, heap.byteOffset + textsPtr, tc * 20);
+      const tpdv = new DataView(heap.buffer, heap.byteOffset + tpsPtr);
+      ctx.font = '12px "FusionPixel", monospace';
+      ctx.textBaseline = "top";
+      for (let i = 0; i < tc; i++) {
+        const b = i * 20;
+        const cpo = tdv.getUint16(b, true), cnt = tdv.getUint16(b + 2, true);
+        const x = tdv.getInt16(b + 4, true), y = tdv.getInt16(b + 6, true);
+        const right = tdv.getInt16(b + 8, true), bottom = tdv.getInt16(b + 10, true);
+        const align = tdv.getUint8(b + 12);
+        const color = tdv.getUint32(b + 16, true);
+        let s = "";
+        for (let k = 0; k < cnt; k++) s += String.fromCodePoint(tpdv.getUint32((cpo + k) * 4, true));
+        if (!s) continue;
+        ctx.fillStyle = `rgb(${color & 255},${(color >> 8) & 255},${(color >> 16) & 255})`;
+        const w = ctx.measureText(s).width;
+        let tx = x;
+        if (align === 1) tx = x + (right - x - w) / 2;
+        else if (align === 2) tx = right - w;
+        ctx.fillText(s, tx, y + (bottom - y - 12) / 2);
       }
     }
 

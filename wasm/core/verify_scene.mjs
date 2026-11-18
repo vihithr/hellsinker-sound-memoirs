@@ -6,7 +6,7 @@ import factory from "./core.js";
 
 const core = await factory();
 const size = core._scene_state_size();
-if (size !== 2736) throw new Error(`unexpected SceneState size: ${size}`);
+if (size !== 2976) throw new Error(`unexpected SceneState size: ${size}`);
 const ptr = core._alloc(size);
 if (!ptr) throw new Error("alloc failed");
 const base = core.HEAPU8.byteOffset + ptr;

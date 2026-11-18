@@ -98,6 +98,35 @@ void panelBox(int x, int y, int r, int b, COLORREF c) {
     FillRectCol(S(x), S(y), S(r), S(b), c);
 }
 
+// ---- Unicode text helpers (SYS / LIB shell pages) -------------------------
+// Convert an ASCII/UTF-8 string to UTF-32 code points and emit a gfx_text cmd.
+static void textUtf8(const char* text, int x, int y, int right, int bottom,
+                     COLORREF color, std::uint8_t align = GFX_ALIGN_LEFT) {
+    if (!text) return;
+    std::uint32_t cps[64];
+    int n = 0;
+    for (const unsigned char* p = (const unsigned char*)text; *p && n < 64;) {
+        std::uint32_t cp = *p++;
+        if (cp >= 0xC0 && cp < 0xE0 && *p) { cp = ((cp & 0x1F) << 6) | (*p++ & 0x3F); }
+        else if (cp >= 0xE0 && cp < 0xF0 && *p && p[1]) {
+            std::uint32_t b1 = *p++; std::uint32_t b2 = *p++;
+            cp = ((cp & 0x0F) << 12) | ((b1 & 0x3F) << 6) | (b2 & 0x3F);
+        }
+        cps[n++] = cp;
+    }
+    gfx_text(cps, n, S(x), S(y), S(right), S(bottom), color, align);
+}
+// Emit text from a UTF-32 code point array stored in SceneState.
+static void textCodePoints(const int* cps, int count, int x, int y, int right,
+                           int bottom, COLORREF color,
+                           std::uint8_t align = GFX_ALIGN_LEFT) {
+    if (!cps || count <= 0) return;
+    std::uint32_t buf[64];
+    int n = 0;
+    for (int i = 0; i < count && n < 64; ++i) buf[n++] = (std::uint32_t)cps[i];
+    gfx_text(buf, n, S(x), S(y), S(right), S(bottom), color, align);
+}
+
 // Draw a run-length vector table (2x source coords) as crisp scaled rects.
 // ox,oy = logical origin of the artwork; col0/col1 = theme colors for c=0/1.
 void DrawRuns(const ArtRun* runs, int n, float ox, float oy,
@@ -255,8 +284,12 @@ void PaintSpectrum(const layout::SpecGeom& g) {
 }
 
 void PaintTitle() {
-    // drawn as vector runs (crisp at any resolution), not a bitmap blit
-    DrawRuns(kTitleRuns, kTitleRunsN, 152, 18, Th().title, Th().titleBlock);
+    // Blit the original 418x56 title artwork at half size. The run-vector path
+    // below only kept two flat colors and lost the outline/shadow layers the
+    // original wide, heavy glyphs rely on; the bitmap restores that 1:1 look.
+    // Nearest-neighbour scaling is handled by each gfx backend (COLORONCOLOR
+    // on GDI, imageSmoothingEnabled=false on Canvas).
+    gfx_blit(kGfxImageBase + 0, 0, 0, 418, 56, 152, 18, 209, 28);
 }
 
 // Selection cursor: 56x16 cell.  Amber margins around the glyph band (the
@@ -826,6 +859,137 @@ void sceneAdvance(SceneState& s, stage::Memory& memory, int id, double seconds,
     s.wing[1] = memory.wing[1];
 }
 
+static void PaintSystemPanel() {
+    const Theme& t = Th();
+    const COLORREF ink = t.panel, frame = t.frame, accent = t.bar;
+    const COLORREF helpInk = t.ink, buttonInk = t.outer;
+    const COLORREF stripBase = LerpCol(t.panel, t.strip, 0.16f);
+    const COLORREF stripEdge = LerpCol(t.panel, t.frame, 0.45f);
+    const COLORREF stripShade = t.seam;
+    const int L = 144, T = 249, R = 495, B = 475;
+    panelBox(L, T, R, B, ink);
+    panelBox(L, T, R, T + 1, frame);
+    panelBox(L, T + 1, L + 1, B, frame);
+    panelBox(R - 1, T + 1, R, B, frame);
+    panelBox(L, B - 1, R, B, frame);
+    textUtf8("SETTINGS", 154, 249, 285, 271, helpInk);
+    panelBox(154, 268, 355, 269, stripEdge);
+    static const char* labels[5] = { "OUTPUT LEVEL", "PALETTE", "LANGUAGE", "LIB FONT", "COMPOSITION" };
+    static const char* helpText[5] = { "Master output level", "Interface and signal palette",
+        "Interface and help language", "Library track title typeface", "Screen composition" };
+    const int active = g_state->settingRow, y0 = 283, pitch = 31;
+    char valueBuf[32];
+    for (int row = 0; row < 5; ++row) {
+        const int y = y0 + pitch * row, top = y + 5, bottom = y + pitch - 4;
+        const bool isActive = row == active;
+        const COLORREF rowStrip = isActive ? LerpCol(stripBase, t.stripHot, 0.15f) : stripBase;
+        if (isActive) { panelBox(154, top - 3, 486, top - 1, frame); panelBox(154, bottom, 486, bottom + 2, frame); }
+        panelBox(154, top, 486, bottom, rowStrip);
+        panelBox(154, top, 486, top + 1, stripEdge);
+        panelBox(154, bottom - 1, 486, bottom, stripShade);
+        panelBox(156, y + 10, 158, y + 24, accent);
+        textUtf8(labels[row], 161, y + 7, 260, y + 26, t.ink);
+        panelBox(161, y + 27, 248, y + 29, accent);
+        const COLORREF btnEdge = isActive ? frame : LerpCol(frame, t.frame, 0.18f);
+        panelBox(269, y + 7, 294, y + 26, buttonInk);
+        panelBox(269, y + 7, 294, y + 8, btnEdge);
+        panelBox(269, y + 25, 294, y + 26, stripShade);
+        panelBox(462, y + 7, 485, y + 26, buttonInk);
+        panelBox(462, y + 7, 485, y + 8, btnEdge);
+        panelBox(462, y + 25, 485, y + 26, stripShade);
+        const int mid = y + 16;
+        panelBox(277, mid - 1, 286, mid + 1, t.ink); panelBox(281, mid - 4, 283, mid + 5, t.ink);
+        panelBox(469, mid - 1, 478, mid + 1, t.ink); panelBox(473, mid - 4, 475, mid + 5, t.ink);
+        if (row == 0) std::snprintf(valueBuf, sizeof(valueBuf), "%d%%", g_state->volume);
+        else if (row == 1) std::snprintf(valueBuf, sizeof(valueBuf), "%s", Th().name);
+        else if (row == 2) { const char* langs[3] = { "ENGLISH", "ZH", "JA" }; std::snprintf(valueBuf, sizeof(valueBuf), "%s", langs[g_state->language % 3]); }
+        else if (row == 3) std::snprintf(valueBuf, sizeof(valueBuf), "%s", g_state->libFont ? "PIXEL" : "ORIGINAL");
+        else { textCodePoints(g_state->layoutName, g_state->layoutNameLen, 303, y + 6, 454, y + 27, t.digit, GFX_ALIGN_RIGHT); continue; }
+        textUtf8(valueBuf, 303, y + 6, 454, y + 27, t.digit, GFX_ALIGN_RIGHT);
+        if (row == 0) {
+            for (int seg = 0; seg < 20; ++seg) { const int x = 304 + seg * 7;
+                panelBox(x, y + 27, x + 4, y + 29, seg * 5 < g_state->volume ? accent : LerpCol(rowStrip, ink, 0.38f)); }
+        } else if (row == 1) {
+            const COLORREF sw[4] = { frame, t.digit, t.bar, t.selEdge };
+            for (int i = 0; i < 4; ++i) panelBox(418 + i * 9, y + 27, 425 + i * 9, y + 30, sw[i]);
+        }
+    }
+    panelBox(154, 442, 486, 475, t.outer);
+    panelBox(154, 442, 486, 443, frame);
+    panelBox(157, 447, 160, 471, frame);
+    textUtf8(helpText[active % 5], 167, 444, 481, 460, helpInk);
+    textUtf8("Default: 80%", 167, 458, 481, 474, t.digit);
+}
+
+static void PaintArchivePage() {
+    const Theme& t = Th();
+    const bool local = g_state->current >= kTrackCount;
+    // Status line: HOLD / ON AIR, now-playing title, time / duration.
+    textUtf8(g_state->libPaused ? "HOLD" : "ON AIR", 154, 249, 201, 264, t.digit);
+    char now[48];
+    if (g_state->current >= 0 && g_state->current < kTrackCount)
+        std::snprintf(now, sizeof(now), "TR / %02d", g_state->current);
+    else std::snprintf(now, sizeof(now), "LOCAL FILE");
+    textUtf8(now, 204, 249, 383, 264, t.ink);
+    char timeBuf[48];
+    const int pos = (int)(g_state->libPositionMs / 1000.0);
+    const int dur = (int)g_state->duration;
+    std::snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d/%02d:%02d",
+                  pos / 60, pos % 60, dur / 60, dur % 60);
+    textUtf8(timeBuf, 384, 249, 486, 264, t.digit, GFX_ALIGN_RIGHT);
+    // seek rail
+    panelBox(154, 266, 486, 268, t.seam);
+    if (dur > 0) {
+        const int end = 154 + int((486 - 154) * (std::min(1.0, std::max(0.0, (double)pos / dur))) + .5);
+        if (end > 154) panelBox(154, 266, end, 268, t.bar);
+    }
+    textUtf8("LOCAL ARCHIVE", 154, 271, 330, 289, t.ink);
+    // search + add row
+    panelBox(154, 293, 405, 309, t.strip);
+    if (g_state->searchTextLen > 0)
+        textCodePoints(g_state->searchText, g_state->searchTextLen, 159, 293, 400, 309, t.ink);
+    else textUtf8("Search tracks", 159, 293, 400, 309, t.ink);
+    textUtf8("Add files", 406, 293, 486, 309, t.digit, GFX_ALIGN_CENTER);
+    // ruled slots
+    for (int row = 0; row < 7; ++row) {
+        const int y = 330 + row * 18;
+        panelBox(154, y, 158, y + 1, t.frame);
+        panelBox(160, y, 486, y + 1, t.strip);
+    }
+    // track rows (ASCII fallback titles from localTitle slot)
+    const int first = g_state->libScroll;
+    for (int row = 0; row < 7; ++row) {
+        const int idx = first + row;
+        const int y = 313 + row * 18;
+        if (idx >= 46) break;
+        const bool selected = idx == g_state->libCursor;
+        if (selected) panelBox(154, y + 2, 157, y + 15, t.selEdge);
+        char num[8]; std::snprintf(num, sizeof(num), "%03d", idx + 1);
+        textUtf8(num, 161, y, 188, y + 17, t.digit);
+        char title[40];
+        if (idx == g_state->current && g_state->localTitle[0]) {
+            std::snprintf(title, sizeof(title), "%s", g_state->localTitle);
+        } else {
+            std::snprintf(title, sizeof(title), "LIB TRACK %03d", idx + 1);
+        }
+        textUtf8(title, 192, y, 464, y + 17, selected ? t.digit : t.ink);
+        if (local && idx == g_state->current) {
+            for (int j = 0; j < 3; ++j) {
+                const int h = 2 + (j == 1 ? (int)g_state->spectrum.barsLevel[3 + j * 4] / 10 : 0);
+                panelBox(471 + j * 4, y + 14 - h, 473 + j * 4, y + 14, t.bar);
+            }
+        }
+    }
+    panelBox(154, 440, 486, 441, t.frame);
+    static const char* orders[4] = { "ORDER", "ONE", "LOOP", "SHUFFLE" };
+    textUtf8(orders[g_state->localOrder % 4], 154, 443, 212, 460, t.digit);
+    textUtf8(g_state->libPlaying && !g_state->libPaused ? "PAUSE" : "PLAY", 213, 443, 277, 460, t.digit);
+    textUtf8("Stop", 278, 443, 331, 460, t.digit);
+    textUtf8("<", 341, 443, 375, 460, t.digit, GFX_ALIGN_CENTER);
+    textUtf8("1 / 1", 375, 443, 453, 460, t.ink, GFX_ALIGN_CENTER);
+    textUtf8(">", 453, 443, 486, 460, t.digit, GFX_ALIGN_CENTER);
+}
+
 void sceneRender(const SceneState& s, float scale, const stage::Memory& memory,
                  SceneHost* host) {
     g_state = &s;
@@ -855,10 +1019,10 @@ void sceneRender(const SceneState& s, float scale, const stage::Memory& memory,
     }
     PaintTitle();
 
-    if (s.page == 2) {          // System settings (shell-owned body)
-        if (host) host->drawSystemPanel();
-    } else if (s.page == 1) {   // Local archive (shell-owned body)
-        if (host) host->drawArchiveBody();
+    if (s.page == 2) {          // System settings (shared painter)
+        PaintSystemPanel();
+    } else if (s.page == 1) {   // Local archive (shared painter)
+        PaintArchivePage();
     } else {
         const layout::TracksGeom& g = layout::tracks(s.layoutMode);
         PaintInfo(g, host);

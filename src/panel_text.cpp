@@ -514,3 +514,35 @@ void DrawPanelText(HDC dc, RECT pixelRect, const std::wstring& text,
     if (oldFont) SelectObject(dc, oldFont);
     if (saved) RestoreDC(dc, saved);
 }
+
+void DrawCodepointLine(HDC dc, const std::uint32_t* cps, int count,
+                       RECT rect, COLORREF color, int align) {
+    if (!dc || !cps || count <= 0 || rect.right <= rect.left) return;
+    std::wstring text;
+    text.reserve(count);
+    for (int i = 0; i < count; ++i) {
+        const std::uint32_t cp = cps[i];
+        if (cp <= 0xFFFF) text.push_back((wchar_t)cp);
+        else {
+            const std::uint32_t v = cp - 0x10000;
+            text.push_back((wchar_t)(0xD800 + (v >> 10)));
+            text.push_back((wchar_t)(0xDC00 + (v & 0x3FF)));
+        }
+    }
+    HFONT font = Fonts().GetFont(12);
+    const int saved = SaveDC(dc);
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, color);
+    HGDIOBJ oldFont = font ? SelectObject(dc, font) : nullptr;
+    IntersectClipRect(dc, rect.left, rect.top, rect.right, rect.bottom);
+    SIZE size = {};
+    if (font) GetTextExtentPoint32W(dc, text.c_str(), (int)text.size(), &size);
+    int x = rect.left;
+    if (align == 1) x = rect.left + (rect.right - rect.left - size.cx) / 2;
+    else if (align == 2) x = rect.right - size.cx;
+    const int y = rect.top + (rect.bottom - rect.top - size.cy) / 2;
+    SetTextAlign(dc, TA_LEFT | TA_TOP | TA_NOUPDATECP);
+    if (font) TextOutW(dc, x, y, text.c_str(), (int)text.size());
+    if (oldFont) SelectObject(dc, oldFont);
+    if (saved) RestoreDC(dc, saved);
+}

@@ -51,6 +51,19 @@ enum GfxOp : std::uint8_t {
     GFX_POP_CLIP
 };
 
+// A run of CJK/Unicode text, addressed by UTF-32 code points. The desktop GDI
+// backend renders it with the embedded Fusion Pixel font; the WASM backend
+// records it for Canvas fillText with a dynamically loaded web font. Kept in a
+// separate pool because its payload is variable-length code points.
+struct GfxTextCmd {
+    std::uint16_t codePointsOffset;  // into the gfx_text_points pool
+    std::uint16_t count;             // number of code points
+    std::int16_t  x, y, right, bottom;
+    std::uint8_t  align;             // 0=left, 1=center, 2=right
+    COLORREF      color;
+};
+constexpr std::uint8_t GFX_ALIGN_LEFT = 0, GFX_ALIGN_CENTER = 1, GFX_ALIGN_RIGHT = 2;
+
 // One recorded drawing instruction (WASM backend transport; harmless to
 // compile everywhere). Point payloads live in a separate pool referenced by
 // pointsOffset/pointsCount so the struct stays a 20-byte POD.
@@ -84,8 +97,12 @@ void gfx_ellipse(int x0, int y0, int x1, int y1, COLORREF c);
 // Atlas blit: copy cell (sx,sy,sw,sh) from atlas src to (dx,dy) sized
 // (dw,dh). src is the themed cell-atlas index (0..4), matching the resource
 // ids loaded by the desktop backend and wasm/assets/cells_<src>.png.
+// src >= kGfxImageBase addresses full original artwork instead:
+//   kGfxImageBase + 0 = title (resource 102 / wasm/assets/title.png)
+//   kGfxImageBase + 1 = axis  (resource 103 / wasm/assets/axis.png)
 void gfx_blit(int src, int sx, int sy, int sw, int sh, int dx, int dy,
               int dw, int dh);
+constexpr int kGfxImageBase = 100;
 
 // ---- rail fade (channelRail) ----------------------------------------------
 // The page rail fades by blending the pre-rail background back over the
@@ -105,10 +122,18 @@ void gfx_capture_blend(COLORREF fallback, int cover);
 void gfx_push_clip(int x0, int y0, int x1, int y1);
 void gfx_pop_clip();
 
+// ---- Unicode text ---------------------------------------------------------
+// Draw a line of text (UTF-32 code points) inside a logical-space rect.
+void gfx_text(const std::uint32_t* codePoints, int count, int x, int y,
+              int right, int bottom, COLORREF color, std::uint8_t align);
+
 // ---- WASM backend transport -----------------------------------------------
 const GfxCmd*   gfx_commands();
 const GfxPoint* gfx_points();
 int gfx_count();
+const GfxTextCmd*  gfx_texts();
+const std::uint32_t* gfx_text_points();
+int gfx_text_count();
 
 #ifdef _WIN32
 // Desktop-only: bind the GDI backend to a device context. The shared painter

@@ -6,20 +6,44 @@ Usage (from player/):
   python tools/verify_scene_pixels.py
 """
 import struct
+import sys
 from pathlib import Path
-from PIL import Image
+from PIL import Image, ImageDraw
 
 root = Path(__file__).resolve().parents[1]
+baseline_name = sys.argv[1] if len(sys.argv) > 1 else "baseline_theme0.bmp"
 data = (root / "obj/scene_dump.bin").read_bytes()
 off = 0
 n = struct.unpack_from("<I", data, off)[0]; off += 4
 cmds = data[off:off + n * 20]; off += n * 20
 mp = struct.unpack_from("<I", data, off)[0]; off += 4
-pts = data[off:off + mp * 4]
+pts = data[off:off + mp * 4]; off += mp * 4
+# Optional text pool tail (SYS/LIB pages). Absent in old dumps.
+texts = []
+if off + 4 <= len(data):
+    tc = struct.unpack_from("<I", data, off)[0]; off += 4
+    texts_raw = data[off:off + tc * 20]; off += tc * 20
+    if off + 4 <= len(data):
+        tpc = struct.unpack_from("<I", data, off)[0]; off += 4
+        text_pts = data[off:off + tpc * 4]
+    else:
+        text_pts = b''
+    for i in range(tc):
+        cpo, cnt = struct.unpack_from("<HH", texts_raw, i * 20)
+        x, y, right, bottom = struct.unpack_from("<hhhh", texts_raw, i * 20 + 4)
+        align = texts_raw[i * 20 + 12]
+        color = struct.unpack_from("<I", texts_raw, i * 20 + 16)[0]
+        codes = struct.unpack_from("<%dI" % cnt, text_pts, cpo * 4) if cnt else ()
+        texts.append((codes, x, y, right, bottom, align, color))
 
 img = Image.new("RGB", (640, 480), (0, 0, 0))
 pix = img.load()
 cells = Image.open(root / "wasm/assets/cells_0.png").convert("RGB")
+# Full artwork addressed by src >= kGfxImageBase (100): title=100, axis=101.
+images = {
+    100: Image.open(root / "wasm/assets/title.png").convert("RGB"),
+    101: Image.open(root / "wasm/assets/axis.png").convert("RGB"),
+}
 
 
 def cmd(i):
@@ -87,13 +111,40 @@ for i in range(n):
             line(ax, ay, bx, by, color, width)
             ax, ay = bx, by
     elif op == 8:    # BLIT
+        # Source rect in x0,y0,x1,y1; destination pos in point[0],
+        # destination size in point[1] ({0,0} falls back to source size).
         dx, dy = pt(po)
-        tile = cells.crop((x0, y0, x0 + x1, y0 + y1))
+        dw, dh = pt(po + 1)
+        dw = dw or x1; dh = dh or y1
+        source = images.get(src, cells)
+        tile = source.crop((x0, y0, x0 + x1, y0 + y1))
+        if (dw, dh) != (x1, y1):
+            tile = tile.resize((dw, dh), Image.NEAREST)
         img.paste(tile, (dx, dy))
+
+# Render the text pool with Fusion Pixel 12px (matches the desktop GDI font).
+if texts:
+    from PIL import ImageFont
+    font_path = root / "assets/fonts/fusion-pixel-12px-monospaced-zh_hans.ttf"
+    font = ImageFont.truetype(str(font_path), 12) if font_path.exists() else None
+    td = ImageDraw.Draw(img)
+    for codes, x, y, right, bottom, align, color in texts:
+        s = "".join(chr(c) for c in codes if c)
+        if not s or not font:
+            continue
+        rgb = (color & 255, (color >> 8) & 255, (color >> 16) & 255)
+        try:
+            bb = td.textbbox((0, 0), s, font=font)
+            tw, th = bb[2] - bb[0], bb[3] - bb[1]
+        except Exception:
+            tw, th = len(s) * 12, 12
+        tx = x if align == 0 else ((x + right - tw) // 2 if align == 1 else right - tw)
+        ty = y + (bottom - y - th) // 2
+        td.text((tx, ty), s, fill=rgb, font=font)
 
 img.save(root / "obj/scene_render.png")
 
-ref = Image.open(root / "obj/baseline_theme0.bmp").convert("RGB")
+ref = Image.open(root / "obj" / baseline_name).convert("RGB")
 rp = ref.load()
 total = 0
 worst = 0

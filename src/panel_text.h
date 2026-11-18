@@ -5,6 +5,7 @@
 #endif
 
 #include <windows.h>
+#include <cstdint>
 #include <string>
 
 enum class PanelTextMode {
@@ -20,3 +21,8 @@ enum class PanelTextMode {
 void DrawPanelText(HDC dc, RECT pixelRect, const std::wstring& text,
                    COLORREF color, UINT align, float scale, HDC atlas,
                    PanelTextMode mode = PanelTextMode::AtlasFirst);
+
+// Pixel-font-only line renderer used by the shared scene painter's gfx_text
+// backend. codePoints is UTF-32; rect is in device pixels; align is 0/1/2.
+void DrawCodepointLine(HDC dc, const std::uint32_t* codePoints, int count,
+                       RECT pixelRect, COLORREF color, int align);

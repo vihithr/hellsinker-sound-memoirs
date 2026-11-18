@@ -13,6 +13,13 @@ GfxCmd g_cmds[kMaxCmds];
 GfxPoint g_points[kMaxPoints];
 int g_count = 0;
 int g_pointCount = 0;
+// Unicode text pool (separate from the drawing command buffer).
+constexpr int kMaxTexts = 256;
+constexpr int kMaxTextPoints = 4096;
+GfxTextCmd g_texts[kMaxTexts];
+std::uint32_t g_textPoints[kMaxTextPoints];
+int g_textCount = 0;
+int g_textPointCount = 0;
 // Last capture region (rail fade): the replay cannot read back the canvas,
 // so the blend is encoded against this remembered rectangle.
 int g_capX0 = 0, g_capY0 = 0, g_capX1 = 0, g_capY1 = 0;
@@ -28,10 +35,28 @@ int storePoints(const GfxPoint* pts, int n) {
 }
 }
 
-void gfx_reset() { g_count = 0; g_pointCount = 0; }
+void gfx_reset() { g_count = 0; g_pointCount = 0; g_textCount = 0; g_textPointCount = 0; }
 const GfxCmd* gfx_commands() { return g_cmds; }
 const GfxPoint* gfx_points() { return g_points; }
 int gfx_count() { return g_count; }
+const GfxTextCmd* gfx_texts() { return g_texts; }
+const std::uint32_t* gfx_text_points() { return g_textPoints; }
+int gfx_text_count() { return g_textCount; }
+
+void gfx_text(const std::uint32_t* cps, int count, int x, int y,
+              int right, int bottom, COLORREF color, std::uint8_t align) {
+    if (count <= 0 || !cps || g_textCount >= kMaxTexts) return;
+    const int offset = g_textPointCount;
+    for (int i = 0; i < count && g_textPointCount < kMaxTextPoints; ++i)
+        g_textPoints[g_textPointCount++] = cps[i];
+    GfxTextCmd cmd{};
+    cmd.codePointsOffset = (std::uint16_t)offset;
+    cmd.count = (std::uint16_t)count;
+    cmd.x = (std::int16_t)x; cmd.y = (std::int16_t)y;
+    cmd.right = (std::int16_t)right; cmd.bottom = (std::int16_t)bottom;
+    cmd.align = align; cmd.color = color;
+    g_texts[g_textCount++] = cmd;
+}
 
 void gfx_clear(COLORREF c) {
     GfxCmd cmd{}; cmd.op = GFX_CLEAR; cmd.color = c; push(cmd);

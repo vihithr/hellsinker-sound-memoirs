@@ -133,7 +133,10 @@ $Exports = @(
     "_scene_render",
     "_scene_commands",
     "_scene_points",
-    "_scene_count"
+    "_scene_count",
+    "_scene_texts",
+    "_scene_text_points",
+    "_scene_text_count"
 ) -join ","
 
 $LinkFlags = @(
