@@ -130,7 +130,7 @@ USAGE.md              面向使用者的文档
 
 A standalone Win32 jukebox that recreates the **SOUND MEMOIRS** screen from *Hellsinker* — the 5×10 track grid, 43-band spectrum, level meters, waveform and the one-second `PLAY TIME` tick — and can also play your own local music library.
 
-- **Download:** grab `hsbgm.exe` from [Releases](../../releases/latest) and run it. No runtime required.
+- **Download:** grab `hsbgm.exe` from [Releases](https://github.com/vihithr/hellsinker-sound-memoirs/releases/latest) and run it. No runtime required.
 - **Game tracks:** install a legitimate copy of Hellsinker. The player auto-detects common install paths; otherwise set `GameDir=` in `hsbgm.ini` or pass `--gamedir <path>`.
 - **Local music:** `hsbgm.exe --file "D:\music\song.mp3"`.
 - **Build:** Visual Studio 2022 with the x86 toolchain, then run `build.bat` in the repository root.
