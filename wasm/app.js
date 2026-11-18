@@ -345,6 +345,9 @@ try{
     get settingRow(){return settingRow;},
     get layout(){return layoutMode;},
     get theme(){return theme;},
+    get stage(){return stageMode;},
+    get wing(){return wingMode;},
+    get libFont(){return libFont;},
     clickCanvas(x,y){const r=screen.getBoundingClientRect();screen.dispatchEvent(new MouseEvent("click",{clientX:r.left+x*(r.width/640),clientY:r.top+y*(r.height/480),bubbles:true}));}
   };
   // Deterministic click test via #testclick=<x>,<y> in logical canvas coords.

@@ -164,6 +164,19 @@ void DrawCells(const char* text, int x, int y, int palette = 0) {
     }
 }
 
+// LIB track titles: ORIGINAL font uses the 8x11 cell atlas (ASCII only,
+// uppercased), PIXEL font uses the gfx_text path (dynamic CJK web font).
+static void textLib(const char* text, int x, int y, int right, int bottom,
+                    COLORREF color, std::uint8_t align = GFX_ALIGN_LEFT) {
+    if (!text) return;
+    if (g_state->libFont == 0) {
+        (void)right; (void)bottom; (void)align;
+        DrawCells(text, x + 4, y + 5, 0);
+    } else {
+        textUtf8(text, x, y, right, bottom, color, align);
+    }
+}
+
 // ---- painting ------------------------------------------------------------
 
 // Level meter (asm 0x7F1E43..0x7F20DA): count = abs(int(env/32767*90));
@@ -972,7 +985,7 @@ static void PaintArchivePage() {
         } else {
             std::snprintf(title, sizeof(title), "LIB TRACK %03d", idx + 1);
         }
-        textUtf8(title, 192, y, 464, y + 17, selected ? t.digit : t.ink);
+        textLib(title, 192, y, 464, y + 17, selected ? t.digit : t.ink);
         if (local && idx == g_state->current) {
             for (int j = 0; j < 3; ++j) {
                 const int h = 2 + (j == 1 ? (int)g_state->spectrum.barsLevel[3 + j * 4] / 10 : 0);
