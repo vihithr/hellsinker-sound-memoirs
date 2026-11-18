@@ -17,6 +17,7 @@ function toggleFullscreen(){
 }
 $("aux-load")?.addEventListener("click",()=>{files.click();wakeAux();});
 $("aux-full")?.addEventListener("click",toggleFullscreen);
+$("aux-page")?.addEventListener("click",()=>{selectPage((page+1)%3);wakeAux();});
 
 // ---- state (mirrors the desktop PlayerApp subset the replica needs) --------
 let names=[],locals=[],available=[],selected=0,current=null;
@@ -106,7 +107,7 @@ function cycleTheme(){theme=(theme+1)%THEMES.length;refreshTitle();markRailActiv
 function cycleStage(){stageMode=(stageMode+1)%4;markRailActivity();}
 function cycleWing(){wingMode=(wingMode+1)%5;markRailActivity();}
 function cycleLayout(){layoutMode=(layoutMode+1)%5;showGridOverlay=false;markRailActivity();}
-function selectPage(p){page=p;switchTick=tick;markRailActivity();}
+function selectPage(p){page=p;switchTick=tick;document.body.dataset.page=String(p);markRailActivity();}
 function adjustSetting(direction){
   switch(settingRow){
     case 0: setVolume(volume+direction*5); break;
@@ -151,6 +152,11 @@ function hitTrack(x,y){
 function hitExit(x,y){return x>=156&&x<212&&y>=272&&y<288;}
 screen.addEventListener("click",e=>{
   const {x,y}=canvasPoint(e);
+  // Channel rail (TR/LIB/SYS) sits at x 362..486, y 272..288 on every page.
+  if(y>=272&&y<288&&x>=366&&x<486){
+    const ch=Math.floor((x-366)/40);
+    if(ch>=0&&ch<3){selectPage(ch);return;}
+  }
   if(page===1){ // LIB
     if(y>=293&&y<309){files.click();return;}
     if(y>=313&&y<439){const row=Math.floor((y-313)/18);const idx=libScroll+row;if(idx>=0&&idx<playlist.length){libCursor=idx;markRailActivity();}return;}
@@ -284,7 +290,8 @@ try{
       stateView.setFloat64(2672,seconds,true);
       stateView.setInt32(2680,current!==null&&current>=names.length?1:0,true);
       stateView.setInt32(2684,loading?1:0,true);
-      stateView.setInt32(2688,railActivityTick,true);
+      // Keep the TR/LIB/SYS rail visible: it is the only on-screen page switch.
+      stateView.setInt32(2688,tick,true);
       stateView.setInt32(2720,switchTick,true);
       stateView.setInt32(2724,showGridOverlay?1:0,true);
       stateView.setFloat64(2728,buffer?buffer.duration:0,true);
@@ -322,6 +329,15 @@ try{
   if(h.includes("sys"))page=2;else if(h.includes("lib"))page=1;
   if(h.includes("settled"))tick=200; // skip entrance tint for deterministic capture
   loadFontForLang();
+  // Test hook: exposes state and synthesized canvas clicks for headless checks.
+  window.__hsTest={
+    get page(){return page;},
+    setPage(p){selectPage(p);},
+    clickCanvas(x,y){const r=screen.getBoundingClientRect();screen.dispatchEvent(new MouseEvent("click",{clientX:r.left+x*(r.width/640),clientY:r.top+y*(r.height/480),bubbles:true}));}
+  };
+  // Deterministic click test via #testclick=<x>,<y> in logical canvas coords.
+  const tc=(location.hash.match(/testclick=(\d+),(\d+)/)||[]);
+  if(tc.length===3)setTimeout(()=>window.__hsTest.clickCanvas(+tc[1],+tc[2]),600);
   drawFrame();await request("init");ready=true;screen.focus();wakeAux();
 }catch(e){
   document.title="SOUND MEMOIRS  [INIT FAILED]";
