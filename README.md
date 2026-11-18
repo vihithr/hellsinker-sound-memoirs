@@ -36,6 +36,24 @@
 `C` / `T` 在 ORIGINAL → DARK → NEON → PAPER → BLUEPRINT 之间循环，配色同时作用于背景、频谱柱、电平、
 外框、选中高亮、标题与文字。
 
+### 五种画面布局
+
+`F9` 在五种构图之间循环，与配色、演出（`F7`）、侧翼（`F8`）相互独立：
+
+| 布局 | 构图 |
+|---|---|
+| `ORIGINAL` | 复刻的原版面板：顶部标题、中央频谱窗、TR 网格、左右侧翼。输出与改装前逐像素一致 |
+| `FIELD` | 全幅示波场：无面板框与侧翼，频谱横贯全宽、上下对称，`TAB` 呼出原版网格 |
+| `STACK` | 纵向三栏：左声道电平、中间频谱与波形、右侧完整 46 首列表 |
+| `RING` | 环形仪表：43 频段沿圆周放射，曲目成为外圈刻度，中心为 L/R 的 XY 图形 |
+| `CROSS` | 十字准星：四轴分区，中心菱形窗显示 XY 图形，`TAB` 呼出原版网格 |
+
+| 全幅场 `FIELD` | 环形 `RING` |
+|---|---|
+| ![field](docs/layout-field.png) | ![ring](docs/layout-ring.png) |
+
+布局只接管 `TR` 页；`LIB` 与 `SYS` 保持原版功能页面。选择写入 `hsbgm.ini` 的 `Layout`。
+
 ### 浏览器与跨平台开发
 
 [TR / WASM 播放器](wasm/README.md) 使用同一套 C++ 索引、解码和频谱算法；导入自己的 PAK 或 WAV / OGG 即可使用。[Web 视觉实验](web/README.md) 是另一个独立入口，用来比较仪表和档案主题。模块边界、平台评估与测试入口见[架构说明](docs/architecture.md)。
@@ -89,13 +107,15 @@ python tools\make_art_runs.py      :: 生成 src/themed_art_runs.h
 | `LIB`：点击左下顺序标签 | 依次切换顺序（首次默认）→ 单曲 → 列表循环 → 随机 |
 | `LIB` 右键 | 导入文件夹、移除、向前/向后移动、按文件名排序 |
 | `SYS`：↑ / ↓、← / →、Enter | 选择设置行并调整；Enter 向下一档，`←` 向上一档 |
-| `SYS`：点击 `-` / `+` | 调整四行 `SYSTEM / CONFIG` 面板：输出音量、配色、界面语言、LIB 曲名字体 |
+| `SYS`：点击 `-` / `+` | 调整五行 `SYSTEM / CONFIG` 面板：输出音量、配色、界面语言、LIB 曲名字体、画面布局 |
 | `Esc` | `TR`：播放中先停止，否则关窗；`LIB`：返回 `TR`；`SYS`：返回来源页 |
 | `Ctrl+L` | 从 `LIB` 返回 `TR`，在其他频道打开 `LIB` |
 | `Ctrl+O` 或 `M` | 多选文件加入曲库并播放第一项 |
 | `N` / `P`、PgDn / PgUp | 按曲库存储顺序下一首 / 上一首 |
 | `C` 或 `T` | 循环切换主题 |
 | `F6` | 切换 `FIT` / `INTEGER` 窗口缩放 |
+| `F7` / `F8` / `F9` | 循环播放演出 / 侧翼效果 / 画面布局 |
+| `TAB` | 在 `FIELD` / `CROSS` 布局中呼出或收起原版 TR 网格 |
 | `+` / `-` | 输出音量 ±5 |
 | 拖入文件 | 多文件加入曲库并播放第一项 |
 
@@ -107,6 +127,7 @@ python tools\make_art_runs.py      :: 生成 src/themed_art_runs.h
 build.bat              MSVC 构建脚本
 stb_vorbis.c           OGG 解码（第三方）
 src/                   播放器源码（Win32 + GDI + Media Foundation）
+  layout.cpp/.h        画面布局的几何与名称（原版几何表为基准）
 assets/               界面图集与文本资源
 tools/                图集 / run 表生成脚本
 docs/                 README 用截图

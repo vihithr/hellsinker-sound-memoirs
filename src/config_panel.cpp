@@ -12,8 +12,8 @@ constexpr int kPanelR = 495;
 constexpr int kPanelB = 475;
 constexpr int kStripL = 154;
 constexpr int kStripR = 486;
-constexpr int kSettingY0 = 288;
-constexpr int kSettingPitch = 36;
+constexpr int kSettingY0 = 283;
+constexpr int kSettingPitch = 31;
 
 int Scale(int value, float scale) {
     return static_cast<int>(value * scale + 0.5f);
@@ -134,7 +134,8 @@ void Paint(const DrawContext& context, const State& state) {
         Localize(state.language, L"PALETTE", L"画面配色", L"配色"),
         Localize(state.language, L"LANGUAGE", L"界面语言", L"言語"),
         Localize(state.language, L"LIB FONT", L"曲库字体",
-                 L"ライブラリ書体")
+                 L"ライブラリ書体"),
+        Localize(state.language, L"COMPOSITION", L"画面布局", L"画面構成")
     };
 
     std::wstring values[kSettingCount];
@@ -143,11 +144,12 @@ void Paint(const DrawContext& context, const State& state) {
     values[2] = state.language == lib::Lang::ZH ? L"简体中文" :
                 state.language == lib::Lang::JA ? L"日本語" : L"ENGLISH";
     values[3] = state.libraryFont == 1 ? L"PIXEL" : L"ORIGINAL";
+    values[4] = state.layoutName ? state.layoutName : L"ORIGINAL";
 
     for (int row = 0; row < kSettingCount; ++row) {
         const int y = kSettingY0 + kSettingPitch * row;
-        const int top = y + 8;
-        const int bottom = y + 38;
+        const int top = y + 5;
+        const int bottom = y + kSettingPitch - 4;
         const bool active = row == state.activeRow;
         const COLORREF thisStrip = active
             ? Lerp(stripBase, palette.stripHot, 0.15f)
@@ -163,23 +165,23 @@ void Paint(const DrawContext& context, const State& state) {
 
         // A tiny cap and short red rule read as an instrument label without
         // adding another competing border around the row.
-        Box(context, 156, y + 15, 158, y + 29, accent);
-        Line(context, 161, y + 10, 260, y + 29, labels[row], palette.ink);
-        Box(context, 161, y + 31, 248, y + 33, accent);
+        Box(context, 156, y + 10, 158, y + 24, accent);
+        Line(context, 161, y + 7, 260, y + 26, labels[row], palette.ink);
+        Box(context, 161, y + 27, 248, y + 29, accent);
 
         const COLORREF buttonEdge = active
             ? palette.frame
             : Lerp(frameInk, palette.frame, 0.18f);
-        Box(context, 269, y + 12, 294, y + 33, buttonInk);
-        Box(context, 269, y + 12, 294, y + 13, buttonEdge);
-        Box(context, 269, y + 32, 294, y + 33, stripShade);
-        Box(context, 462, y + 12, 485, y + 33, buttonInk);
-        Box(context, 462, y + 12, 485, y + 13, buttonEdge);
-        Box(context, 462, y + 32, 485, y + 33, stripShade);
+        Box(context, 269, y + 7, 294, y + 26, buttonInk);
+        Box(context, 269, y + 7, 294, y + 8, buttonEdge);
+        Box(context, 269, y + 25, 294, y + 26, stripShade);
+        Box(context, 462, y + 7, 485, y + 26, buttonInk);
+        Box(context, 462, y + 7, 485, y + 8, buttonEdge);
+        Box(context, 462, y + 25, 485, y + 26, stripShade);
 
         for (int side = 0; side < 2; ++side) {
             const int x = side ? 473 : 281;
-            const int middle = y + 22;
+            const int middle = y + 16;
             if (row == 0) {
                 Box(context, x - 4, middle - 1, x + 5, middle + 1,
                     palette.ink);
@@ -199,13 +201,13 @@ void Paint(const DrawContext& context, const State& state) {
             }
         }
 
-        Line(context, 303, y + 9, 454, y + 30, values[row],
+        Line(context, 303, y + 6, 454, y + 27, values[row],
              palette.digit, DT_RIGHT);
 
         if (row == 0) {
             for (int segment = 0; segment < 20; ++segment) {
                 const int x = 304 + segment * 7;
-                Box(context, x, y + 31, x + 4, y + 33,
+                Box(context, x, y + 27, x + 4, y + 29,
                     segment * 5 < state.volume
                         ? palette.bar
                         : Lerp(thisStrip, configInk, 0.38f));
@@ -216,8 +218,8 @@ void Paint(const DrawContext& context, const State& state) {
                 palette.selectedEdge
             };
             for (int swatch = 0; swatch < 4; ++swatch) {
-                Box(context, 418 + swatch * 9, y + 30,
-                    425 + swatch * 9, y + 33, swatches[swatch]);
+                Box(context, 418 + swatch * 9, y + 27,
+                    425 + swatch * 9, y + 30, swatches[swatch]);
             }
         }
     }

@@ -1,6 +1,7 @@
 // main.cpp - CLI entry points (--list, --selftest, --play, --bench) and the GUI.
 #include "common.h"
 #include "stage.h"
+#include "layout.h"
 #include "resolver.h"
 #include "decoder.h"
 #include "ui.h"
@@ -330,6 +331,12 @@ void PrintUsage() {
     printf("  --file <path>       open and loop a local music file (also Ctrl+O or drop)\n");
     printf("  --gamedir <path>    override the HellSinker. install folder\n");
     printf("  --bench <name>      decode one track and report timing\n");
+    printf("  --layout <0..4>     composition (0 = original panel layout)\n");
+    printf("  --shot <path.bmp>   render one 2x frame to a BMP and exit\n");
+    printf("  --theme <0..4>      palette override (use with --shot)\n");
+    printf("  --stage <0..3>      playback visual override (use with --shot)\n");
+    printf("  --page <0..2>       page override for --shot (0 tracks, 1 library, 2 system)\n");
+    printf("  --shot-scale <1|2>  render scale for --shot (default 2)\n");
     printf("  --help              this text\n\n");
     printf("controls: UP/DOWN/LEFT/RIGHT select, ENTER/SPACE loopplay,\n");
     printf("          S/ESC stop, +/- volume, CTRL+Q quit (ALT+F4 also works)\n");
@@ -357,6 +364,12 @@ int main(int argc, char** argv) {
     std::string playName;
     std::string benchName;
     std::string gameDirArg;
+    std::string shotPath;
+    int layoutArg = -1;
+    int themeArg = -1;
+    int stageArg = -1;
+    int settingsPageArg = 0;
+    int settingsShotScale = 2;
 
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
@@ -401,6 +414,62 @@ int main(int argc, char** argv) {
                 return 2;
             }
             gameDirArg = argv[++i];
+        } else if (a == "--layout") {
+            if (i + 1 >= argc) {
+                printf("--layout needs a number\n");
+                return 2;
+            }
+            layoutArg = atoi(argv[++i]);
+            if (layoutArg < 0 || layoutArg >= layout::Count) {
+                printf("--layout out of range 0..%d\n", layout::Count - 1);
+                return 2;
+            }
+        } else if (a == "--shot") {
+            if (i + 1 >= argc) {
+                printf("--shot needs an output path\n");
+                return 2;
+            }
+            shotPath = argv[++i];
+        } else if (a == "--theme") {
+            if (i + 1 >= argc) {
+                printf("--theme needs a number\n");
+                return 2;
+            }
+            themeArg = atoi(argv[++i]);
+            if (themeArg < 0 || themeArg > 4) {
+                printf("--theme out of range 0..4\n");
+                return 2;
+            }
+        } else if (a == "--stage") {
+            if (i + 1 >= argc) {
+                printf("--stage needs a number\n");
+                return 2;
+            }
+            stageArg = atoi(argv[++i]);
+            if (stageArg < 0 || stageArg >= stage::count) {
+                printf("--stage out of range 0..%d\n", stage::count - 1);
+                return 2;
+            }
+        } else if (a == "--shot-scale") {
+            if (i + 1 >= argc) {
+                printf("--shot-scale needs 1 or 2\n");
+                return 2;
+            }
+            settingsShotScale = atoi(argv[++i]);
+            if (settingsShotScale != 1 && settingsShotScale != 2) {
+                printf("--shot-scale must be 1 or 2\n");
+                return 2;
+            }
+        } else if (a == "--page") {
+            if (i + 1 >= argc) {
+                printf("--page needs a number\n");
+                return 2;
+            }
+            settingsPageArg = atoi(argv[++i]);
+            if (settingsPageArg < 0 || settingsPageArg > 2) {
+                printf("--page out of range 0..2\n");
+                return 2;
+            }
         } else if (a == "--help" || a == "-h" || a == "/?") {
             PrintUsage();
             return 0;
@@ -449,10 +518,19 @@ int main(int argc, char** argv) {
     if (settings.volume < 0) settings.volume = 0;
     if (settings.volume > 100) settings.volume = 100;
     settings.theme = GetIniInt(ini, "Theme", 0);
+    if (themeArg >= 0) settings.theme = themeArg;
+    if (settings.theme < 0 || settings.theme > 4) settings.theme = 0;
     settings.wingMode = GetIniInt(ini,"WingMode",0);
     if(settings.wingMode<0 || settings.wingMode>=stage::wingCount) settings.wingMode=0;
     settings.stageMode = GetIniInt(ini,"VisualMode",0);
     if(settings.stageMode<0 || settings.stageMode>=stage::count) settings.stageMode=0;
+    if (stageArg >= 0) settings.stageMode = stageArg;
+    settings.layoutMode = GetIniInt(ini, "Layout", 0);
+    if (settings.layoutMode < 0 || settings.layoutMode >= layout::Count) settings.layoutMode = 0;
+    if (layoutArg >= 0) settings.layoutMode = layoutArg;
+    settings.shotPath = shotPath;
+    settings.shotPage = settingsPageArg;
+    settings.shotScale = settingsShotScale;
     settings.libFont = GetIniInt(ini, "LibFont", 1);
     if (settings.libFont < 0 || settings.libFont > 1) settings.libFont = 1;
     settings.scaleMode = GetIniInt(ini, "ScaleMode", 1);
@@ -486,13 +564,17 @@ int main(int argc, char** argv) {
         return rc;
     }
 
-    if (!gameDir.empty()) PutIniString(ini, "GameDir", gameDir);
-    PutIniInt(ini, "Volume", settings.volume);
-    PutIniInt(ini, "Theme", settings.theme);
-    PutIniInt(ini, "WingMode", settings.wingMode);
-    PutIniInt(ini, "VisualMode", settings.stageMode);
-    PutIniInt(ini, "LibFont", settings.libFont);
-    PutIniInt(ini, "ScaleMode", settings.scaleMode);
-    PutIniInt(ini, "LastTrack", settings.initialTrack);
+    // --shot is a headless render; it must not overwrite the user's ini.
+    if (shotPath.empty()) {
+        if (!gameDir.empty()) PutIniString(ini, "GameDir", gameDir);
+        PutIniInt(ini, "Volume", settings.volume);
+        PutIniInt(ini, "Theme", settings.theme);
+        PutIniInt(ini, "WingMode", settings.wingMode);
+        PutIniInt(ini, "VisualMode", settings.stageMode);
+        PutIniInt(ini, "Layout", settings.layoutMode);
+        PutIniInt(ini, "LibFont", settings.libFont);
+        PutIniInt(ini, "ScaleMode", settings.scaleMode);
+        PutIniInt(ini, "LastTrack", settings.initialTrack);
+    }
     return 0;
 }

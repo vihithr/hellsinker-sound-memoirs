@@ -7,6 +7,7 @@
 // were recovered by measuring the original screen; the tuning values sit
 // inline next to the drawing code that consumes them.
 #include "ui.h"
+#include "layout.h"
 #include "library.h"
 #include "tag_reader.h"
 #include "panel_text.h"
@@ -152,6 +153,7 @@ void RefreshTitle();
 enum class Page { Tracks, Library, System };
 Page page = Page::Tracks, returnPage = Page::Tracks;
 int settingRow = 0, hoverChannel = -1;
+bool fieldGrid = false;   // TAB overlay for the Field / Cross compositions
 constexpr unsigned kRailIdleDelayFrames = 150;
 constexpr unsigned kRailFadeFrames = 60;
 unsigned lastRailActivityTick = 0;
@@ -203,14 +205,22 @@ void lineText(HDC dc,int x,int y,int right,int bottom,const std::wstring& value,
 std::wstring basenameW(const std::wstring& p) {return p.substr(p.find_last_of(L"/\\")+1);}
 
 
+const layout::TracksGeom& TG() {
+    return layout::tracks(g_app.settings ? g_app.settings->layoutMode : 0);
+}
+const layout::SpecGeom& SG() {
+    return layout::spec(g_app.settings ? g_app.settings->layoutMode : 0);
+}
+
 RECT TrackRect(int i) {
-    int col = i / kGridRows;   // column-major, like the game
-    int row = i % kGridRows;
+    const layout::TracksGeom& g = TG();
+    int col = i / g.rows;   // column-major, like the game
+    int row = i % g.rows;
     RECT r;
-    r.left = kGridX + col * kGridCol - 4;
-    r.top = kGridY + row * kGridRow - 8;
-    r.right = r.left + kGridCol;
-    r.bottom = r.top + kGridRow;
+    r.left = g.gridX + col * g.colW - 4;
+    r.top = g.gridY + row * g.rowH - 8;
+    r.right = r.left + g.colW;
+    r.bottom = r.top + g.rowH;
     return r;
 }
 
@@ -656,7 +666,7 @@ void PaintFrame(HDC dc) {
     HLine(dc, S(xl), S(xr), S(yb), kColFrame, 2);
 }
 
-void PaintSpectrum(HDC dc) {
+void PaintSpectrum(HDC dc, const layout::SpecGeom& g) {
     PlayerApp& app = g_app;
     const int t = (int)app.tick;
     // entrance fades (n32-keyed alphas in the original):
@@ -668,25 +678,26 @@ void PaintSpectrum(HDC dc) {
     int labelA = ClampI(20 * t - 800, 0, 255);
 
     COLORREF panel = LerpCol(kColOuter, kColPanel, bgA);
-    FillRectCol(dc, S(kSpecL), S(kSpecT), S(kSpecR), S(kSpecAxisY), panel);
+    FillRectCol(dc, S(g.l), S(g.t), S(g.r), S(g.axisY), panel);
 
     // band seams: 1px columns tinted toward the theme seam color
     for (int i = 0; i < 8; ++i) {
         COLORREF c = LerpCol(panel, Th().seam, seamA);
-        VLine(dc, S(kSpecT), S(kSpecAxisY), S(kSeamX[i]), c, max(1, S(1)));
+        VLine(dc, S(g.t), S(g.axisY), S(kSeamX[i]), c, max(1, S(1)));
     }
 
     // 43 columns: current level (tex 88) from the compressed level, decay
     // tail (tex 87) from the OLD smoothed state down to level/4.
+    const int kBars = g.bars;
     for (int k = 0; k < kBars; ++k) {
         int level = (int)app.spectrum.barsLevel[k];
         int old = (int)app.spectrum.barsPrev[k];
-        int x1 = S(kSpecL + kBarPitch * k);
-        int x2 = S(kSpecL + kBarPitch * k + kBarW);
+        int x1 = S(g.l + g.pitch * k);
+        int x2 = S(g.l + g.pitch * k + g.barW);
         if (level > 3) {
             int segs = (level >> 2) + 1;
             for (int m = 0; m < segs; ++m) {
-                int y2 = kBarBaseY - 3 * m;
+                int y2 = g.barBase - 3 * m;
                 int y1 = y2 - kSegH;
                 FillRectCol(dc, x1, S(y1), x2, S(y2), kColBar);
             }
@@ -695,7 +706,7 @@ void PaintSpectrum(HDC dc) {
             int segs = (old >> 2) - level / 4 + 1;
             for (int m = 0; m < segs; ++m) {
                 int mm = level / 4 + m;
-                int y2 = kBarBaseY - 3 * mm;
+                int y2 = g.barBase - 3 * mm;
                 int y1 = y2 - kSegH;
                 FillRectCol(dc, x1, S(y1), x2, S(y2), kColBarLit);
             }
@@ -706,12 +717,12 @@ void PaintSpectrum(HDC dc) {
     // from the atlas orange row (palette 4), matching the original weight.
     if (axisA > 0) {
         COLORREF fc = LerpCol(panel, Th().frame, axisA / 255.0f);
-        FillRectCol(dc, S(kSpecL), S(kSpecAxisY), S(kSpecR), S(kSpecAxisY + 2), fc);
+        FillRectCol(dc, S(g.l), S(g.axisY), S(g.r), S(g.axisY + 2), fc);
     }
     if (labelA > 0) {
         for (int i = 0; i < 8; ++i) {
             int len = (int)strlen(kFreqLabel[i]);
-            DrawCells(dc, kFreqLabel[i], kSeamX[i] - 4 * len + 4, kSpecAxisY + 4, 4);
+            DrawCells(dc, kFreqLabel[i], kSeamX[i] - 4 * len + 4, g.axisY + 4, 4);
         }
     }
 }
@@ -725,42 +736,42 @@ void PaintTitle(HDC dc) {
 // Selection cursor: 56x16 cell at x = 156+56*col, y = 288+16*row (EXIT row
 // y = 272..288).  Amber margins around the glyph band (band drawn by the
 // caller via DrawCells palette 1).  Position jumps instantly.
-void PaintSelection(HDC dc, int col, int row) {
-    int x = 156 + 56 * col;
-    int y = 288 + 16 * row;
+void PaintSelection(HDC dc, const layout::TracksGeom& g, int col, int row) {
+    int x = g.gridX - 12 + g.colW * col;
+    int y = g.gridY - 8 + g.rowH * row;
     // original 5-frame pulse: margins brighten on phases 2..4
     bool pulse = (g_app.tick % 5) >= 2;
     COLORREF base = pulse ? LerpCol(kColSelBase, RGB(255, 255, 255), 0.12f) : kColSelBase;
     COLORREF edge = pulse ? LerpCol(kColSelEdge, RGB(255, 255, 255), 0.12f) : kColSelEdge;
     COLORREF foot = pulse ? LerpCol(kColSelFoot, RGB(255, 255, 255), 0.12f) : kColSelFoot;
-    FillRectCol(dc, S(x), S(y), S(x + 56), S(y + 16), base);
+    FillRectCol(dc, S(x), S(y), S(x + g.colW), S(y + g.rowH), base);
     // cream glyph band: ONE full-width horizontal strip across the cell
-    FillRectCol(dc, S(x), S(y + 3), S(x + 56), S(y + 14), Th().selBand);
-    FillRectCol(dc, S(x), S(y), S(x + 56), S(y + 1), edge);
-    FillRectCol(dc, S(x), S(y + 14), S(x + 56), S(y + 15), foot);
+    FillRectCol(dc, S(x), S(y + 3), S(x + g.colW), S(y + 14), Th().selBand);
+    FillRectCol(dc, S(x), S(y), S(x + g.colW), S(y + 1), edge);
+    FillRectCol(dc, S(x), S(y + 14), S(x + g.colW), S(y + 15), foot);
 }
 
 // The flashing white light is a horizontal STRIPE inside the orange block
 // (not a filled sub-block): a centered translucent white bar whose height
 // pulses 0,2,4,6,8 over the original 5-frame cycle = the selection blink.
-void PaintSelectionStripe(HDC dc) {
+void PaintSelectionStripe(HDC dc, const layout::TracksGeom& g) {
     PlayerApp& app = g_app;
     int col, row;
     if (app.selected == kExitIndex) { col = 0; row = -1; }
-    else { col = app.selected / kGridRows; row = app.selected % kGridRows; }
-    int x = 156 + 56 * col;
-    int y = 288 + 16 * row;
+    else { col = app.selected / g.rows; row = app.selected % g.rows; }
+    int x = g.gridX - 12 + g.colW * col;
+    int y = g.gridY - 8 + g.rowH * row;
     int h = 2 * (int)(app.tick % 5);
     if (h <= 0) return;
     int cy = y + 8;
-    AlphaFill(dc, S(x + 1), S(cy - h / 2), S(x + 55), S(cy - h / 2 + h),
+    AlphaFill(dc, S(x + 1), S(cy - h / 2), S(x + g.colW - 1), S(cy - h / 2 + h),
               Th().selStripe, 0x60);
 }
 
-void PaintExit(HDC dc) {
+void PaintExit(HDC dc, const layout::TracksGeom& g) {
     bool selected = g_app.selected == kExitIndex;
-    if (selected) PaintSelection(dc, 0, -1);
-    DrawCells(dc, "EXIT", kExitX, kExitY, selected ? 1 : 0, true);
+    if (selected) PaintSelection(dc, g, 0, -1);
+    DrawCells(dc, "EXIT", g.exitX, g.exitY, selected ? 1 : 0, true);
 }
 
 void PaintGridLabel(HDC dc, int idx, int x, int y, bool selected) {
@@ -769,23 +780,23 @@ void PaintGridLabel(HDC dc, int idx, int x, int y, bool selected) {
     DrawCells(dc, label, x, y, selected ? 1 : 0, true);
 }
 
-void PaintGrid(HDC dc) {
+void PaintGrid(HDC dc, const layout::TracksGeom& g) {
     PlayerApp& app = g_app;
-    for (int col = 0; col < kGridCols; ++col) {
-        for (int row = 0; row < kGridRows; ++row) {
-            int idx = col * kGridRows + row;
+    for (int col = 0; col < g.cols; ++col) {
+        for (int row = 0; row < g.rows; ++row) {
+            int idx = col * g.rows + row;
             if (idx >= kTrackCount) continue;
-            if (app.selected == idx) PaintSelection(dc, col, row);
-            int x = kGridX + kGridCol * col;
-            int y = kGridY + kGridRow * row;
+            if (app.selected == idx) PaintSelection(dc, g, col, row);
+            int x = g.gridX + g.colW * col;
+            int y = g.gridY + g.rowH * row;
             PaintGridLabel(dc, idx, x, y, app.selected == idx);
         }
     }
 }
 
-void PaintInfo(HDC dc) {
+void PaintInfo(HDC dc, const layout::TracksGeom& g) {
     PlayerApp& app = g_app;
-    const int x = kInfoX, y1 = kInfoY1, y2 = kInfoY2;
+    const int x = g.infoX, y1 = g.infoY1, y2 = g.infoY2;
 
     std::string line1;
     if (app.loading) {
@@ -842,11 +853,11 @@ void PaintInfo(HDC dc) {
     HLine(dc, S(lineLeft), S(lineLeft) + S(19 * 8), S(y2 + 4), Th().underline, max(1, S(1)));
 }
 
-void PaintHints(HDC dc) {
+void PaintHints(HDC dc, const layout::TracksGeom& g) {
     PlayerApp& app = g_app;
     // 0x7EF2DE: (dword_86690C/24)%2 picks the half-alpha blink variant.
     int palette = ((app.tick / 24) % 2) ? 2 : 0;
-    DrawCells(dc, "<MAINSHOT: LOOPPLAY> <SUBWEAPON: STOP>", kHintX, kHintY, palette);
+    DrawCells(dc, "<MAINSHOT: LOOPPLAY> <SUBWEAPON: STOP>", g.hintX, g.hintY, palette);
 }
 
 void EnsureBackBuffer(PlayerApp& app, HDC refDC) {
@@ -878,6 +889,69 @@ void EnsureBackBuffer(PlayerApp& app, HDC refDC) {
     SetBkMode(app.backDC, TRANSPARENT);
     SetStretchBltMode(app.backDC, COLORONCOLOR);
     EnsureArt();
+}
+
+// --shot: dump the finished back buffer as a 24bpp bottom-up BMP so layout
+// changes can be diffed against the pre-change baseline.
+bool SaveBackBufferBmp(PlayerApp& app, const std::string& path) {
+    if (!app.backDC || !app.backBmp || app.backW <= 0 || app.backH <= 0) return false;
+    const int w = app.backW, h = app.backH;
+    const int stride = ((w * 3) + 3) & ~3;
+    const DWORD imageSize = (DWORD)stride * (DWORD)h;
+    std::vector<unsigned char> pixels(imageSize, 0);
+    BITMAPINFO bmi;
+    memset(&bmi, 0, sizeof(bmi));
+    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth = w;
+    bmi.bmiHeader.biHeight = -h;    // top-down rows; BMP readers accept this
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 24;
+    bmi.bmiHeader.biCompression = BI_RGB;
+    // GetDIBits refuses a bitmap that is still selected into the DC, so ask a
+    // throwaway DC that never had app.backBmp in it.
+    HDC tmp = CreateCompatibleDC(NULL);
+    const bool got = tmp && GetDIBits(tmp, app.backBmp, 0, (UINT)h, pixels.data(),
+                                      &bmi, DIB_RGB_COLORS);
+    if (tmp) DeleteDC(tmp);
+    if (!got) return false;
+
+    BITMAPFILEHEADER fh;
+    memset(&fh, 0, sizeof(fh));
+    fh.bfType = 0x4D42;
+    fh.bfOffBits = (DWORD)(sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER));
+    fh.bfSize = fh.bfOffBits + imageSize;
+    FILE* f = NULL;
+    if (fopen_s(&f, path.c_str(), "wb") != 0 || !f) return false;
+    fwrite(&fh, sizeof(fh), 1, f);
+    fwrite(&bmi.bmiHeader, sizeof(BITMAPINFOHEADER), 1, f);
+    fwrite(pixels.data(), 1, imageSize, f);
+    fclose(f);
+    return true;
+}
+
+// --shot runs without an audio device; fill the visualiser with a
+// deterministic synthetic spectrum so layout screenshots exercise every
+// element instead of showing an empty field.
+void FillShotSpectrum(PlayerApp& app) {
+    for (int k = 0; k < memoirs::kSpectrumBands; ++k) {
+        const float t = k / float(memoirs::kSpectrumBands);
+        float v = 30.f + 55.f * exp(-pow((t - 0.22f) * 3.4f, 2.f))
+                       + 34.f * exp(-pow((t - 0.55f) * 5.0f, 2.f));
+        v += 12.f * sinf(t * 21.f);
+        app.spectrum.barsLevel[k] = std::clamp(v, 0.f, 96.f);
+        app.spectrum.barsPrev[k] = std::clamp(v * 0.72f, 0.f, 96.f);
+    }
+    for (int i = 0; i < 240; ++i) {
+        const float p = i / 240.f;
+        app.spectrum.waveL[i] = 26.f * sinf(p * 47.f) *
+                                (0.4f + 0.6f * sinf(p * 3.1f));
+        app.spectrum.waveR[i] = 20.f * sinf(p * 61.f + 1.7f) *
+                                (0.5f + 0.5f * sinf(p * 2.3f));
+    }
+    app.spectrum.envL = 0.62f;
+    app.spectrum.envR = 0.48f;
+    for (int i = 0; i < 30; ++i)
+        stageMemory.advance(app.spectrum, 0, i * 0.05, true, false);
 }
 
 // The archive replaces the lower instrument panel; the visualizer keeps running.
@@ -1085,13 +1159,392 @@ void PaintWings(HDC dc,int style,const stage::Memory& motion){
         DrawCells(dc,side?"CH : L":"CH : R",base-20,13,3);
     }
 }
+// ---- composition: full-frame field -------------------------------------
+// No panel frame and no side wings: the spectrum becomes a symmetric
+// full-width field with the title floating in a corner.  TAB raises the
+// original TR grid on top so selection keeps the original coordinates.
+void PaintFieldLayout(HDC dc) {
+    PlayerApp& app = g_app;
+    const auto& t = Th();
+    FillRectCol(dc, 0, 0, S(kLogicalW), S(kLogicalH),
+                LerpCol(t.outer, t.panel, 0.55f));
+
+    const int baseY = 340;
+    FillRectCol(dc, 0, S(baseY), S(kLogicalW), S(baseY + 2),
+                LerpCol(t.frame, t.outer, 0.42f));
+
+    const int cols = memoirs::kSpectrumBands;
+    const int pitch = 14, barW = 12;
+    const int x0 = (kLogicalW - cols * pitch) / 2;
+    for (int k = 0; k < cols; ++k) {
+        const float lv = std::clamp(app.spectrum.barsLevel[k] / 96.0f, 0.f, 1.f);
+        const int x1 = x0 + k * pitch, x2 = x1 + barW;
+        const int up = int(lv * 258);
+        if (up > 1) {
+            FillRectCol(dc, S(x1), S(baseY - up), S(x2), S(baseY),
+                        LerpCol(t.bar, t.wave, 0.42f));
+            FillRectCol(dc, S(x1), S(baseY - up), S(x2), S(baseY - up + 3), t.barLit);
+        }
+        const int down = int(lv * 46);
+        if (down > 1) {
+            FillRectCol(dc, S(x1), S(baseY + 2), S(x2), S(baseY + 2 + down),
+                        LerpCol(t.bar, t.panel, 0.55f));
+        }
+    }
+
+    // frequency ticks and labels sit below the mirrored tail
+    for (int i = 0; i < 8; ++i) {
+        const int x = 48 + i * 78;
+        FillRectCol(dc, S(x), S(baseY + 4), S(x + 1), S(baseY + 50),
+                    LerpCol(t.frame, t.outer, 0.55f));
+        const int len = (int)strlen(kFreqLabel[i]);
+        DrawCells(dc, kFreqLabel[i], x - 4 * len + 4, baseY + 52, 4);
+    }
+
+    // Channel traces: left channel above the baseline, right below, so the
+    // two never paint over each other.
+    POINT pts[120];
+    for (int side = 0; side < 2; ++side) {
+        const float* wv = side ? app.spectrum.waveR : app.spectrum.waveL;
+        for (int i = 0; i < 120; ++i) {
+            const float v = std::clamp(wv[i * 2] / 64.0f, -1.f, 1.f);
+            pts[i].x = S(i * kLogicalW / 119);
+            pts[i].y = S(baseY + (side ? 2 + int(v * 62) : -2 - int(v * 62)));
+        }
+        HGDIOBJ old = SelectObject(dc, GetStockObject(DC_PEN));
+        SetDCPenColor(dc, side ? LerpCol(t.wave, t.outer, 0.38f) : t.wave);
+        Polyline(dc, pts, 120);
+        SelectObject(dc, old);
+    }
+
+    DrawCells(dc, "SOUND MEMOIRS", 24, 24, 0);
+    {
+        const char* themeName = t.name;
+        const int w = (int)strlen(themeName) * 8;
+        DrawCells(dc, themeName, 616 - w, 24, 2);
+    }
+
+    std::string now;
+    if (app.current == kTrackCount) now = "NOW PLAYING : LOCAL FILE";
+    else if (app.current >= 0) {
+        char b[48];
+        snprintf(b, sizeof(b), "NOW PLAYING : TRACK %02d", app.current);
+        now = b;
+    } else now = "<SILENCE>";
+    DrawCells(dc, now, 24, 452, 3);
+    {
+        char tb[32];
+        int secs = max(0, (int)app.audio.positionSeconds());
+        snprintf(tb, sizeof(tb), "TIME : %02dSEC", secs);
+        DrawCells(dc, tb, 616 - (int)strlen(tb) * 8, 452, 3);
+    }
+    DrawCells(dc, "TAB GRID / F9 LAYOUT", 24, 466, 2);
+    {
+        char sb[16];
+        snprintf(sb, sizeof(sb), "SEL:TR:%02d", std::max(0, app.selected));
+        DrawCells(dc, sb, 616 - (int)strlen(sb) * 8, 466, 2);
+    }
+
+    if (fieldGrid) {
+        AlphaFill(dc, 0, 0, S(kLogicalW), S(kLogicalH), RGB(10, 12, 16), 0x8C);
+        FillRectCol(dc, S(148), S(266), S(492), S(kLogicalH), t.outer);
+        const layout::TracksGeom& g = TG();
+        PaintExit(dc, g);
+        PaintGrid(dc, g);
+        PaintSelectionStripe(dc, g);
+        DrawCells(dc, "TAB CLOSE", 24, 466, 2);
+    }
+}
+
+// ---- composition: vertical three-column rack ---------------------------
+// A 24px title bar over three columns: channel meters, the main display and
+// the full 46-track list.  Nothing is borrowed from the original panel frame.
+void PaintStackLayout(HDC dc) {
+    PlayerApp& app = g_app;
+    const auto& t = Th();
+    FillRectCol(dc, 0, 0, S(kLogicalW), S(kLogicalH), LerpCol(t.outer, t.panel, 0.35f));
+
+    FillRectCol(dc, 0, 0, S(kLogicalW), S(24), t.panel);
+    FillRectCol(dc, 0, S(23), S(kLogicalW), S(24), t.frame);
+    DrawCells(dc, "SOUND MEMOIRS", 16, 8, 0);
+    { const char* nm = t.name; DrawCells(dc, nm, 616 - (int)strlen(nm) * 8, 8, 2); }
+
+    // left: two channel meters, bottom-up
+    for (int side = 0; side < 2; ++side) {
+        const int x1 = side ? 44 : 18, x2 = side ? 56 : 30;
+        const int n = std::clamp(int((side ? app.spectrum.envR : app.spectrum.envL) * 60.0f), 0, 60);
+        for (int i = 0; i < n; ++i) {
+            const int y2 = 440 - i * 6;
+            FillRectCol(dc, S(x1), S(y2 - 5), S(x2), S(y2),
+                        i > 44 ? t.stripHot : t.strip);
+        }
+        DrawCells(dc, side ? "R" : "L", x1 + 1, 446, 2);
+    }
+
+    // centre display
+    const int cl = 96, ct = 32, cr = 400, cb = 440;
+    FillRectCol(dc, S(cl), S(ct), S(cr), S(cb), LerpCol(t.panel, t.outer, 0.30f));
+    FillRectCol(dc, S(cl), S(ct), S(cr), S(ct + 1), t.frame);
+    FillRectCol(dc, S(cl), S(cb - 1), S(cr), S(cb), t.frame);
+    FillRectCol(dc, S(cl), S(ct), S(cl + 1), S(cb), t.frame);
+    FillRectCol(dc, S(cr - 1), S(ct), S(cr), S(cb), t.frame);
+
+    const int baseY = 330;
+    const int cols = memoirs::kSpectrumBands;
+    const int pitch = 6, barW = 5;
+    const int x0 = cl + 1 + ((cr - cl - 2) - cols * pitch) / 2;
+    for (int k = 0; k < cols; ++k) {
+        const float lv = std::clamp(app.spectrum.barsLevel[k] / 96.0f, 0.f, 1.f);
+        const int x1 = x0 + k * pitch, x2 = x1 + barW;
+        const int up = int(lv * 238);
+        if (up > 1) {
+            FillRectCol(dc, S(x1), S(baseY - up), S(x2), S(baseY),
+                        LerpCol(t.wave, t.bar, 0.40f));
+            FillRectCol(dc, S(x1), S(baseY - up), S(x2), S(baseY - up + 2), t.barLit);
+        }
+        const int down = int(lv * 22);
+        if (down > 1)
+            FillRectCol(dc, S(x1), S(baseY + 1), S(x2), S(baseY + 1 + down),
+                        LerpCol(t.bar, t.panel, 0.58f));
+    }
+
+    // lower half: the two channel traces
+    POINT pts[120];
+    for (int side = 0; side < 2; ++side) {
+        const float* wv = side ? app.spectrum.waveR : app.spectrum.waveL;
+        const int cy = side ? 416 : 392;
+        for (int i = 0; i < 120; ++i) {
+            const float v = std::clamp(wv[i * 2] / 64.0f, -1.f, 1.f);
+            pts[i].x = S(cl + 4 + i * (cr - cl - 8) / 119);
+            pts[i].y = S(cy + int(v * 18));
+        }
+        HGDIOBJ old = SelectObject(dc, GetStockObject(DC_PEN));
+        SetDCPenColor(dc, side ? LerpCol(t.wave, t.bar, 0.45f) : t.wave);
+        Polyline(dc, pts, 120);
+        SelectObject(dc, old);
+    }
+    DrawCells(dc, "FIELD / 43 BAND", cl + 4, ct + 4, 2);
+
+    // right: full track list, two columns of 23
+    const int listX = 408, listY = 40, colW = 108, rowH = 17;
+    for (int i = 0; i < kTrackCount; ++i) {
+        const int col = i / 23, row = i % 23;
+        const int x = listX + col * colW, y = listY + row * rowH;
+        const bool sel = app.selected == i;
+        if (sel) {
+            FillRectCol(dc, S(x), S(y), S(x + colW - 6), S(y + rowH - 2),
+                        LerpCol(t.selBand, t.panel, 0.30f));
+            FillRectCol(dc, S(x), S(y), S(x + 3), S(y + rowH - 2), t.bar);
+        }
+        char b[8];
+        snprintf(b, sizeof(b), "TR:%02d", i);
+        DrawCells(dc, b, x + 8, y + 3, sel ? 0 : 2);
+    }
+
+    // bottom rail: seek + time + hint
+    FillRectCol(dc, S(cl), S(452), S(cr), S(454), t.seam);
+    const double dur = app.current == kTrackCount ? app.audio.durationSeconds() : 0.0;
+    const double pos = dur > 0 ? app.audio.positionSeconds() : 0.0;
+    const int end = cl + int((cr - cl) * std::clamp(pos / (dur > 0 ? dur : 1.0), 0.0, 1.0));
+    if (end > cl) FillRectCol(dc, S(cl), S(452), S(end), S(454), t.bar);
+    {
+        char tb[32];
+        snprintf(tb, sizeof(tb), "TIME : %02dSEC", std::max(0, int(pos)));
+        DrawCells(dc, tb, 632 - (int)strlen(tb) * 8, 460, 3);
+    }
+    DrawCells(dc, "F7 VISUAL / F8 WING / F9 LAYOUT", cl, 460, 2);
+}
+
+// ---- composition: circular instrument dial -----------------------------
+// The 43 bands radiate from a ring instead of a horizontal window; the 46
+// tracks become tick marks around the outside so the whole screen reads as
+// one dial.  TAB is not needed here.
+void PaintRingLayout(HDC dc) {
+    PlayerApp& app = g_app;
+    const auto& t = Th();
+    const float kPi = 3.14159265f;
+    const int cx = 320, cy = 236;
+    FillRectCol(dc, 0, 0, S(kLogicalW), S(kLogicalH), LerpCol(t.outer, t.panel, 0.42f));
+
+    // concentric guide rings
+    auto ring = [&](int radius, COLORREF c, int thick) {
+        const int segs = 120;
+        for (int i = 0; i < segs; ++i) {
+            const float a = 2.f * kPi * i / segs;
+            const int x = cx + int(radius * cosf(a));
+            const int y = cy + int(radius * sinf(a));
+            FillRectCol(dc, S(x), S(y), S(x + thick), S(y + thick), c);
+        }
+    };
+    ring(96, LerpCol(t.frame, t.outer, 0.35f), 1);
+    ring(126, LerpCol(t.frame, t.outer, 0.20f), 1);
+    ring(196, LerpCol(t.seam, t.outer, 0.30f), 1);
+
+    // 43 radial band blocks, starting at 12 o'clock
+    const int bands = memoirs::kSpectrumBands;
+    for (int k = 0; k < bands; ++k) {
+        const float lv = std::clamp(app.spectrum.barsLevel[k] / 96.0f, 0.f, 1.f);
+        const int blocks = 2 + int(lv * 10.f);
+        const float a = -kPi / 2.f + 2.f * kPi * k / bands;
+        for (int b = 0; b < blocks; ++b) {
+            const int r = 132 + b * 6;
+            const int x = cx + int(r * cosf(a)) - 1;
+            const int y = cy + int(r * sinf(a)) - 1;
+            const COLORREF c = (b == blocks - 1) ? t.bar
+                              : LerpCol(t.wave, t.bar, 0.28f);
+            FillRectCol(dc, S(x), S(y), S(x + 3), S(y + 3), c);
+        }
+    }
+
+    // centre: phase diamond with up to three decayed traces
+    {
+        POINT frame[] = {{S(cx), S(cy - 38)}, {S(cx + 46), S(cy)}, {S(cx), S(cy + 38)},
+                         {S(cx - 46), S(cy)}, {S(cx), S(cy - 38)}};
+        HGDIOBJ old = SelectObject(dc, GetStockObject(DC_PEN));
+        SetDCPenColor(dc, t.frame);
+        Polyline(dc, frame, 5);
+        // XY plot of the two channels: the classic vector-display figure
+        {
+            POINT pts2[120];
+            for (int i = 0; i < 120; ++i) {
+                const float l = std::clamp(app.spectrum.waveL[i * 2] / 64.f, -1.f, 1.f);
+                const float r = std::clamp(app.spectrum.waveR[i * 2] / 64.f, -1.f, 1.f);
+                pts2[i] = {S(cx + int(l * 34)), S(cy - int(r * 34))};
+            }
+            SetDCPenColor(dc, t.bar);
+            Polyline(dc, pts2, 120);
+        }
+        SetDCPenColor(dc, t.bar);
+        FillRectCol(dc, S(cx - 1), S(cy - 1), S(cx + 2), S(cy + 2), t.bar);
+        SelectObject(dc, old);
+    }
+
+    // 46 track ticks on the outside
+    for (int i = 0; i < kTrackCount; ++i) {
+        const float a = -kPi / 2.f + 2.f * kPi * i / kTrackCount;
+        const int x = cx + int(206 * cosf(a));
+        const int y = cy + int(206 * sinf(a));
+        const bool sel = app.selected == i;
+        const int halfW = sel ? 3 : 2, halfH = sel ? 6 : 3;
+        FillRectCol(dc, S(x - halfW), S(y - halfH), S(x + halfW), S(y + halfH),
+                    sel ? t.bar : LerpCol(t.seam, t.ink, 0.55f));
+    }
+
+    DrawCells(dc, "SOUND MEMOIRS", 152, 14, 0);
+    { const char* nm = t.name; DrawCells(dc, nm, 632 - (int)strlen(nm) * 8, 14, 2); }
+
+    {
+        char b[16];
+        snprintf(b, sizeof(b), "TR:%02d", std::max(0, app.selected));
+        DrawCells(dc, b, cx - (int)strlen(b) * 4, 446, app.selected < kTrackCount ? 0 : 2);
+    }
+    DrawCells(dc, "F7 VISUAL / F9 LAYOUT", 196, 462, 2);
+}
+
+// ---- composition: crosshair / vector display ---------------------------
+// Four axes leave a centre window: title above, progress below, one channel
+// trace left and right.  TAB raises the original TR grid like Field does.
+void PaintCrossLayout(HDC dc) {
+    PlayerApp& app = g_app;
+    const auto& t = Th();
+    FillRectCol(dc, 0, 0, S(kLogicalW), S(kLogicalH), LerpCol(t.outer, t.panel, 0.48f));
+
+    const int cx = 320, cy = 240;
+    const COLORREF axis = LerpCol(t.frame, t.outer, 0.66f);
+    FillRectCol(dc, S(cx - 1), S(24), S(cx + 1), S(456), axis);
+    FillRectCol(dc, S(24), S(cy - 1), S(616), S(cy + 1), axis);
+
+    for (int y = 40; y < 456; y += 40) {
+        FillRectCol(dc, S(cx - 6), S(y), S(cx - 1), S(y + 1), t.seam);
+        FillRectCol(dc, S(cx + 1), S(y), S(cx + 6), S(y + 1), t.seam);
+    }
+    for (int x = 40; x < 616; x += 40) {
+        FillRectCol(dc, S(x), S(cy - 6), S(x + 1), S(cy - 1), t.seam);
+        FillRectCol(dc, S(x), S(cy + 1), S(x + 1), S(cy + 6), t.seam);
+    }
+
+    // channel traces ride above (left) and below (right) the horizontal axis
+    POINT pts[120];
+    for (int side = 0; side < 2; ++side) {
+        const float* wv = side ? app.spectrum.waveR : app.spectrum.waveL;
+        const int sway = side ? 26 : -26;
+        const int x0 = side ? 392 : 24;
+        for (int i = 0; i < 120; ++i) {
+            const float v = std::clamp(wv[i * 2] / 64.0f, -1.f, 1.f);
+            pts[i].x = S(x0 + i * 224 / 119);
+            pts[i].y = S(cy + sway + int(v * 16));
+        }
+        HGDIOBJ old = SelectObject(dc, GetStockObject(DC_PEN));
+        SetDCPenColor(dc, side ? LerpCol(t.wave, t.bar, 0.45f) : t.wave);
+        Polyline(dc, pts, 120);
+        SelectObject(dc, old);
+    }
+
+    // centre window: phase diamond over up to three decayed traces
+    {
+        POINT frame[] = {{S(cx), S(cy - 40)}, {S(cx + 48), S(cy)}, {S(cx), S(cy + 40)},
+                         {S(cx - 48), S(cy)}, {S(cx), S(cy - 40)}};
+        HGDIOBJ old = SelectObject(dc, GetStockObject(DC_PEN));
+        SetDCPenColor(dc, t.frame);
+        Polyline(dc, frame, 5);
+        // XY plot of the two channels inside the diamond
+        {
+            POINT pts2[120];
+            for (int i = 0; i < 120; ++i) {
+                const float l = std::clamp(app.spectrum.waveL[i * 2] / 64.f, -1.f, 1.f);
+                const float r = std::clamp(app.spectrum.waveR[i * 2] / 64.f, -1.f, 1.f);
+                pts2[i] = {S(cx + int(l * 40)), S(cy - int(r * 40))};
+            }
+            SetDCPenColor(dc, t.bar);
+            Polyline(dc, pts2, 120);
+        }
+        SelectObject(dc, old);
+    }
+
+    // progress runs down the lower axis
+    {
+        const double dur = app.current == kTrackCount ? app.audio.durationSeconds() : 0.0;
+        const double pos = dur > 0 ? app.audio.positionSeconds() : 0.0;
+        const int len = int(192.0 * std::clamp(pos / (dur > 0 ? dur : 1.0), 0.0, 1.0));
+        FillRectCol(dc, S(cx - 3), S(264), S(cx + 3), S(264 + len), t.bar);
+    }
+
+    DrawCells(dc, "SOUND MEMOIRS", 24, 20, 0);
+    { const char* nm = t.name; DrawCells(dc, nm, 616 - (int)strlen(nm) * 8, 20, 2); }
+    DrawCells(dc, "EXIT", 24, 300, app.selected == kExitIndex ? 1 : 2);
+
+    {
+        char b[24];
+        snprintf(b, sizeof(b), "TR:%02d", std::max(0, app.selected));
+        DrawCells(dc, b, cx - (int)strlen(b) * 4, 466, 0);
+    }
+    DrawCells(dc, "TAB GRID / F9 LAYOUT", 24, 466, 2);
+
+    if (fieldGrid) {
+        AlphaFill(dc, 0, 0, S(kLogicalW), S(kLogicalH), RGB(10, 12, 16), 0x8C);
+        FillRectCol(dc, S(148), S(266), S(492), S(kLogicalH), t.outer);
+        const layout::TracksGeom& g = TG();
+        PaintExit(dc, g);
+        PaintGrid(dc, g);
+        PaintSelectionStripe(dc, g);
+        DrawCells(dc, "TAB CLOSE", 24, 466, 2);
+    }
+}
+
 void PaintScene(HDC dc) {
     SetBkMode(dc, TRANSPARENT);
+    const int layoutMode = g_app.settings->layoutMode;
+    if (page == Page::Tracks) {
+        if (layoutMode == layout::Field) { PaintFieldLayout(dc); return; }
+        if (layoutMode == layout::Stack) { PaintStackLayout(dc); return; }
+        if (layoutMode == layout::Ring) { PaintRingLayout(dc); return; }
+        if (layoutMode == layout::Cross) { PaintCrossLayout(dc); return; }
+    }
     PaintBackdrop(dc);
     const int mode=g_app.settings->stageMode;
     PaintWings(dc,g_app.settings->wingMode?g_app.settings->wingMode:mode+1,stageMemory);
     PaintFrame(dc);
-    if(!mode) PaintSpectrum(dc);
+    if(!mode) PaintSpectrum(dc, SG());
     else {
         const auto& t=Th();
         stage::paint({t.panel,LerpCol(t.seam,t.wave,.48f),t.wave,t.bar,t.frame},dc,g_scale,mode,g_app.spectrum,stageMemory);
@@ -1102,7 +1555,8 @@ void PaintScene(HDC dc) {
     if(page==Page::System) {
         const config_panel::State state = {
             settingRow, g_app.settings->volume, Th().name,
-            lib::language(), g_app.settings->libFont
+            lib::language(), g_app.settings->libFont,
+            layout::name(g_app.settings->layoutMode, lib::language())
         };
         const config_panel::DrawContext drawing = {
             dc, g_scale, PanelAtlas(),
@@ -1113,11 +1567,12 @@ void PaintScene(HDC dc) {
     }
     else if(page==Page::Library) archivePaint(dc);
     else {
-        PaintInfo(dc);
-        PaintExit(dc);
-        PaintGrid(dc);
-        PaintSelectionStripe(dc);
-        PaintHints(dc);
+        const layout::TracksGeom& g = TG();
+        PaintInfo(dc, g);
+        PaintExit(dc, g);
+        PaintGrid(dc, g);
+        PaintSelectionStripe(dc, g);
+        PaintHints(dc, g);
     }
     channelRail(dc);
     if(hoverChannel>=0) {
@@ -1207,13 +1662,30 @@ void adjustSetting(int direction) {
         g_app.settings->theme=g_themeIdx;
         RefreshTitle();
     } else if(settingRow==2) lib::cycleLanguage(direction);
-    else g_app.settings->libFont=(g_app.settings->libFont+direction+2)%2;
+    else if(settingRow==3) g_app.settings->libFont=(g_app.settings->libFont+direction+2)%2;
+    else {
+        g_app.settings->layoutMode=(g_app.settings->layoutMode+direction+layout::Count)%layout::Count;
+        fieldGrid=false;
+        InvalidateRect(g_app.hwnd,nullptr,FALSE);
+    }
 }
 
 void OnKeyDown(HWND hwnd, WPARAM key) {
     PlayerApp& app = g_app;
     if(key==VK_F8){app.settings->wingMode=(app.settings->wingMode+1)%stage::wingCount;InvalidateRect(hwnd,nullptr,FALSE);return;}
     if(key==VK_F7){app.settings->stageMode=(app.settings->stageMode+1)%stage::count;InvalidateRect(hwnd,nullptr,FALSE);return;}
+    if(key==VK_F9) {
+        app.settings->layoutMode=(app.settings->layoutMode+1)%layout::Count;
+        fieldGrid=false;
+        InvalidateRect(hwnd,nullptr,FALSE);
+        return;
+    }
+    if(key==VK_TAB && (app.settings->layoutMode==layout::Field ||
+                       app.settings->layoutMode==layout::Cross)) {
+        fieldGrid=!fieldGrid;
+        InvalidateRect(hwnd,nullptr,FALSE);
+        return;
+    }
     if(key==VK_F6) {toggleIntegerScale(hwnd);return;}
     if(key>=VK_F1 && key<=VK_F3) {selectPage(hwnd,Page(key-VK_F1));return;}
     if(page==Page::System) {
@@ -1279,10 +1751,72 @@ void OnKeyDown(HWND hwnd, WPARAM key) {
     }
 }
 
+// Mouse routing for the compositions that do not use the original panel.
+void HandleLayoutMouse(HWND hwnd, int lx, int ly, bool dbl) {
+    PlayerApp& app = g_app;
+    const int mode = app.settings->layoutMode;
+    if (mode == layout::Stack) {
+        if (lx >= 408 && lx < 624 && ly >= 40 && ly < 431) {
+            const int col = (lx - 408) / 108, row = (ly - 40) / 17;
+            const int idx = col * 23 + row;
+            if (idx >= 0 && idx < kTrackCount) {
+                app.selected = idx;
+                if (dbl) StartTrack(idx);
+                else InvalidateRect(hwnd, nullptr, FALSE);
+            }
+        }
+        return;
+    }
+    if (mode == layout::Ring) {
+        const float dx = float(lx - 320), dy = float(ly - 236);
+        const float r2 = dx * dx + dy * dy;
+        if (r2 >= 170.f * 170.f && r2 <= 230.f * 230.f) {
+            const float kPi = 3.14159265f;
+            float a = atan2f(dy, dx) + kPi / 2.f;
+            if (a < 0) a += 2.f * kPi;
+            int idx = int(a / (2.f * kPi) * kTrackCount + 0.5f) % kTrackCount;
+            app.selected = idx;
+            if (dbl) StartTrack(idx);
+            else InvalidateRect(hwnd, nullptr, FALSE);
+        }
+        return;
+    }
+    // Field / Cross: the crosshair EXIT label is always live; the TAB grid
+    // keeps the original coordinates so its hit test is the original one.
+    if (mode == layout::Cross && lx >= 24 && lx < 72 && ly >= 296 && ly < 314) {
+        if (dbl) PostMessageA(hwnd, WM_CLOSE, 0, 0);
+        else { app.selected = kExitIndex; InvalidateRect(hwnd, NULL, FALSE); }
+        return;
+    }
+    if (!fieldGrid) return;
+    RECT ex;
+    ex.left = S(156); ex.top = S(272);
+    ex.right = S(212); ex.bottom = S(288);
+    if (PointInRect(ex, S(lx), S(ly))) {
+        if (dbl) PostMessageA(hwnd, WM_CLOSE, 0, 0);
+        else { app.selected = kExitIndex; InvalidateRect(hwnd, NULL, FALSE); }
+        return;
+    }
+    for (int i = 0; i < kTrackCount; ++i) {
+        RECT r = TrackRect(i);
+        r.left = S(r.left); r.top = S(r.top); r.right = S(r.right); r.bottom = S(r.bottom);
+        if (PointInRect(r, S(lx), S(ly))) {
+            app.selected = i;
+            if (dbl) StartTrack(i);
+            else InvalidateRect(hwnd, NULL, FALSE);
+            return;
+        }
+    }
+}
+
 void OnMouseDown(HWND hwnd, int x, int y, bool dbl) {
     PlayerApp& app = g_app;
     x -= g_offX; y -= g_offY;   // client -> backbuffer (letterbox) coords
     int lx=(int)floor(x/g_scale),ly=(int)floor(y/g_scale);
+    if (page == Page::Tracks && app.settings->layoutMode != layout::Original) {
+        HandleLayoutMouse(hwnd, lx, ly, dbl);
+        return;
+    }
     if(ly>=272 && ly<288 && lx>=railX && lx<railX+3*channelWidth) {
         selectPage(hwnd,Page((lx-railX)/channelWidth));
         return;
@@ -1398,6 +1932,13 @@ void popup(HWND hwnd,LPARAM coords) {
         for(int i=0;i<stage::wingCount;i++)AppendMenuW(wings,MF_STRING|(g_app.settings->wingMode==i?MF_CHECKED:0),40+i,stage::wingName(i));
         AppendMenuW(m,MF_POPUP,(UINT_PTR)wings,tr(L"Side displays   F8",L"侧翼效果   F8",L"サイド表示   F8"));
     }
+    HMENU comps=CreatePopupMenu();
+    if(comps){
+        for(int i=0;i<layout::Count;i++)
+            AppendMenuW(comps,MF_STRING|(g_app.settings->layoutMode==i?MF_CHECKED:0),
+                        50+i,layout::name(i,lib::language()));
+        AppendMenuW(m,MF_POPUP,(UINT_PTR)comps,tr(L"Composition   F9",L"画面布局   F9",L"画面構成   F9"));
+    }
     if(page==Page::Library) {
         AppendMenuW(m,MF_SEPARATOR,0,nullptr);
         AppendMenuW(m,MF_STRING,1,tr(L"Import folder...",L"导入文件夹…",L"フォルダーを追加…"));
@@ -1413,6 +1954,7 @@ void popup(HWND hwnd,LPARAM coords) {
     else if(cmd==int(kIntegerScaleCommand))toggleIntegerScale(hwnd);
     else if(cmd>=40 && cmd<40+stage::wingCount){g_app.settings->wingMode=cmd-40;InvalidateRect(hwnd,nullptr,FALSE);}
     else if(cmd>=30 && cmd<30+stage::count){g_app.settings->stageMode=cmd-30;InvalidateRect(hwnd,nullptr,FALSE);}
+    else if(cmd>=50 && cmd<50+layout::Count){g_app.settings->layoutMode=cmd-50;fieldGrid=false;InvalidateRect(hwnd,nullptr,FALSE);}
     else if(cmd>0)catalogAction(hwnd,cmd);
 }
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -1543,6 +2085,10 @@ int RunPlayerWindow(Resolver& resolver, PlayerSettings& settings, std::string& e
     // vector UI grows proportionally with resolution and stays crisp.
     const DWORD style = WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN;
     RECT rc = { 0, 0, 1280, 960 };
+    if (!settings.shotPath.empty() && settings.shotScale == 1) {
+        rc.right = 640;
+        rc.bottom = 480;
+    }
     AdjustWindowRect(&rc, style, FALSE);
     HWND hwnd = CreateWindowExA(WS_EX_APPWINDOW, wc.lpszClassName, "SOUND MEMOIRS",
                                 style,
@@ -1569,6 +2115,23 @@ int RunPlayerWindow(Resolver& resolver, PlayerSettings& settings, std::string& e
     DragAcceptFiles(hwnd, TRUE);
     ShowWindow(hwnd, SW_SHOW);
     UpdateWindow(hwnd);
+
+    // --shot: render one settled frame (entrance fades and the panel frame
+    // expansion are over by tick 200) and exit.  Used to diff layout changes.
+    if (!settings.shotPath.empty()) {
+        app.tick = 200;
+        page = Page(std::clamp(settings.shotPage, 0, 2));
+        // Synthetic data only for the new compositions; Original keeps the
+        // silent-frame baseline byte-identical.
+        if (settings.layoutMode != layout::Original) FillShotSpectrum(app);
+        HDC shotDC = GetDC(hwnd);
+        EnsureBackBuffer(app, shotDC);
+        PaintScene(app.backDC);
+        const bool saved = SaveBackBufferBmp(app, settings.shotPath);
+        ReleaseDC(hwnd, shotDC);
+        if (!saved) err = "could not write " + settings.shotPath;
+        return saved ? 0 : 1;
+    }
     // 60 fps like the original: blink parity (24 frames), selection pulse
     // (5 frames) and the entrance ripple (64 frames) all key off this tick.
     // timeBeginPeriod is required or Windows coalesces WM_TIMER to ~31 ms.

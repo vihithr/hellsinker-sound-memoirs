@@ -11,7 +11,7 @@
 
 namespace config_panel {
 
-inline constexpr int kSettingCount = 4;
+inline constexpr int kSettingCount = 5;
 
 struct Palette {
     COLORREF panel;
@@ -39,6 +39,7 @@ struct State {
     const char* paletteName;
     lib::Lang language;
     int libraryFont;
+    const wchar_t* layoutName;
 };
 
 enum class HitAction {
