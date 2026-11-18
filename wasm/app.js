@@ -31,6 +31,19 @@ $("aux-play")?.addEventListener("click",()=>{
   }
   updatePlayButton();wakeAux();
 });
+// Prev/next transport: walks the LIB list when a local track is in play,
+// otherwise steps through the TR jukebox.
+function nextTrack(delta){
+  const inLib=page===1||(current!==null&&current>=names.length);
+  if(inLib&&visible.length){stepLocal(delta);return;}
+  if(!names.length){lastError="LOAD A PAK OR MUSIC FILE";return;}
+  let idx=(current!==null&&current>=0&&current<names.length)?current:selected;
+  if(idx<0)idx=0;
+  idx=(idx+delta+names.length)%names.length;
+  select(idx);activate();
+}
+$("aux-prev")?.addEventListener("click",()=>{nextTrack(-1);wakeAux();});
+$("aux-next")?.addEventListener("click",()=>{nextTrack(1);wakeAux();});
 $("aux-full")?.addEventListener("click",toggleFullscreen);
 $("aux-page")?.addEventListener("click",()=>{selectPage((page+1)%3);wakeAux();});
 $("aux-theme")?.addEventListener("click",()=>{cycleTheme();wakeAux();});
@@ -300,7 +313,48 @@ screen.addEventListener("click",e=>{
 screen.addEventListener("dblclick",e=>{
   const {x,y}=canvasPoint(e);
   if(hitExit(x,y)){stop();return;}
+  // Double-click a LIB row to play it (single click only moves the cursor).
+  if(page===1&&y>=313&&y<439){
+    const row=Math.floor((y-313)/18),idx=libScroll+row;
+    if(idx>=0&&idx<visible.length){libCursor=idx;markRailActivity();libPlayCursor();}
+    return;
+  }
 });
+// ---- scrubbable seek rail (LIB page, y 266..268) --------------------------
+let seeking=false;
+function seekFromX(x){
+  if(!buffer)return;
+  const f=Math.max(0,Math.min(1,(x-154)/(486-154)));
+  offset=f*buffer.duration;
+  if(source)start();          // keep playing from the new spot; stay paused otherwise
+  seekScrubMs=Math.round(offset*1000);
+}
+let seekScrubMs=-1;
+screen.addEventListener("pointerdown",e=>{
+  const {x,y}=canvasPoint(e);
+  screen.focus();markRailActivity();
+  // Wide hit band so a finger can grab the 2px rail on a phone.
+  if(page===1&&y>=258&&y<=278&&x>=150&&x<=490){
+    seeking=true;
+    try{screen.setPointerCapture(e.pointerId);}catch(_){}
+    seekFromX(x);
+    e.preventDefault();
+    return;
+  }
+});
+screen.addEventListener("pointermove",e=>{
+  if(!seeking)return;
+  const {x}=canvasPoint(e);
+  seekFromX(x);
+  e.preventDefault();
+});
+screen.addEventListener("pointerup",e=>{
+  if(seeking){
+    seeking=false;
+    try{screen.releasePointerCapture(e.pointerId);}catch(_){}
+  }
+});
+screen.addEventListener("pointercancel",()=>{seeking=false;});
 screen.addEventListener("pointerdown",()=>{screen.focus();markRailActivity();});
 window.addEventListener("keydown",e=>{
   const k=e.key;
@@ -451,7 +505,7 @@ try{
       stateView.setInt32(2760,localOrder,true);
       stateView.setInt32(2764,paused?1:0,true);
       stateView.setInt32(2768,current!==null&&current>=names.length?1:0,true);
-      stateView.setInt32(2772,Math.round(position()*1000),true);
+      stateView.setInt32(2772,seeking?seekScrubMs:Math.round(position()*1000),true);
       for(let i=0;i<searchText.length&&i<32;i++)stateView.setInt32(2844+i*4,searchText.charCodeAt(i),true);
       stateView.setInt32(2972,searchText.length,true);
       // Row index (within the filtered list) of the playing local track.
@@ -497,6 +551,9 @@ try{
     get playing(){return !!source&&!paused;},
     get paused(){return paused;},
     get positionMs(){return Math.round(position()*1000);},
+    get currentRow(){return current!==null&&current>=names.length?visible.indexOf(current-names.length):-1;},
+    get selected(){return selected;},
+    get current(){return current;},
     get bufferDuration(){return buffer?buffer.duration:0;},
     get localFilesSize(){return localFiles.size;},
     get lastError(){return lastError;},
