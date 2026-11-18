@@ -1,6 +1,12 @@
-# SOUND MEMOIRS Web Prototype
+# SOUND MEMOIRS Web Prototype（探索支线 · 无需同步）
 
-这是独立的视觉实验；复用桌面 C++ 的主线见 [TR / WASM](../wasm/README.md)。
+> **状态：纯 JS 视觉探索支线，无需与桌面主线同步。**
+>
+> 本目录是独立的原型，**不参与一比一复刻，也不需要跟随 `src/` 或 `wasm/` 的任何改动**。
+> 它与桌面端不共用绘制代码，两套主题（`INSTRUMENT` / `PAPER`）仅是视觉比较用。
+>
+> 一比一复刻主线是 [TR / WASM](../wasm/README.md)：那里与桌面端共用同一套 C++ 绘制与算法代码
+> （`src/scene.cpp` + `src/gfx.h` 双后端），任何画面或交互改动只需同步主线。
 
 一个零构建、零外部服务的本地音乐播放器原型。页面包含两套主题：
 

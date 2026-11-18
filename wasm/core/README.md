@@ -12,12 +12,13 @@ powershell -ExecutionPolicy Bypass -File wasm/core/build.ps1
 
 The script pins Emscripten `3.1.74`, downloads the SDK into `player/obj/emsdk`,
 and puts compiler caches and objects under `player/obj`. It does not install a
-global toolchain. Outputs are `core.mjs` and `core.wasm` in this directory.
+global toolchain. Outputs are `core.js` (an ES module; named `.js` so any static
+server serves a JavaScript MIME type) and `core.wasm` in this directory.
 
 The ES module default-exports an async factory:
 
 ```js
-import createMemoirsCore from "./core.mjs";
+import createMemoirsCore from "./core.js";
 
 const core = await createMemoirsCore();
 ```
@@ -52,7 +53,26 @@ and so on. Integer arguments and results are JavaScript numbers.
 
 `HEAPU8` and `HEAP16` are exposed by the factory. The ABI uses 32-bit lengths
 and offsets, so a single PAK must be smaller than 4 GiB. The JS side must keep
-`core.wasm` beside `core.mjs`.
+`core.wasm` beside `core.js`.
+
+## Derived scene painter exports
+
+Revision 1 adds a derived rendering layer under `wasm/render/`. It compiles the
+desktop painting constants and algorithms read-only; `player/src` is not modified.
+
+| Export | Contract |
+| --- | --- |
+| `scene_state_size()` | Byte size of the `SceneState` POD (2688). |
+| `scene_begin()` | Reset the command buffer. Call once per frame before rendering. |
+| `scene_set_state(ptr)` | Copy a JS-filled `SceneState` into WASM. Running wing envelopes are preserved. |
+| `scene_advance(id, seconds, playing, paused)` | Advance wing envelopes from the spectrum in the current state. |
+| `scene_render()` | Emit POD drawing commands via the derived painter. |
+| `scene_commands()` / `scene_points()` / `scene_count()` | Read the command and point pools for Canvas 2D replay. |
+
+`scene.js` replays the command stream on a 640x480 canvas. `verify_scene.mjs`
+validates 13 deterministic frames headlessly; `dump_scene.mjs` plus
+`tools/verify_scene_pixels.py` diffs a settled frame against the desktop
+`hsbgm.exe --shot` baseline. The current baseline differs in 2 of 307200 pixels.
 
 ## Verify
 
@@ -68,8 +88,13 @@ sample count.
 
 ## Verified build
 
-The delivered files were built with Emscripten `3.1.74` on 2026-11-17. Two
-consecutive builds produced identical output hashes:
+Revision 1 (with the derived scene painter) was built with Emscripten `3.1.74`:
+
+- `core.js`: 11102 bytes
+- `core.wasm`: 119246 bytes
+- `core.wasm` SHA-256: `67FBCB28E3A299EE5FF58FF46E025343C33F3E7512CE4A49758385C6928675F6`
+
+The original algorithm-only build from 2026-11-17 produced these hashes:
 
 - `core.mjs`: `ed25eec0311f43572a7f1123f7b18afe4689f4f30e378409116fa9a1081363ee`
 - `core.wasm`: `15a50477a8e27097f6c09a5b762b77e64529098633fb235f0ac446b38367d99a`

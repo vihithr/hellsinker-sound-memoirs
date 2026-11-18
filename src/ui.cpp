@@ -1,11 +1,10 @@
 #include "core/spectrum.h"
 #include "stage.h"
-// ui.cpp - HellSinker "SOUND MEMOIRS" screen, reimplemented to match the
-// original at 640x480 logical resolution, rendered at 2x (1280x960).
-//
-// Layout, palette indices, glyph metrics and the per-frame animation timings
-// were recovered by measuring the original screen; the tuning values sit
-// inline next to the drawing code that consumes them.
+#include "scene.h"
+#include "gfx.h"
+// ui.cpp - the Win32 shell of HellSinker "SOUND MEMOIRS": window, input,
+// audio playlist, backbuffer and the shell-owned overlays. The scene
+// painter itself lives in scene.cpp and is shared with the WASM build.
 #include "ui.h"
 #include "layout.h"
 #include "library.h"
@@ -27,35 +26,11 @@ using std::max;
 namespace {
 
 // ---- logical screen geometry ------------------------------------------
-const int kLogicalW = 640;
-const int kLogicalH = 480;
-
-// panel frame: the original draws four lines at 320+-t1-1 / 320+-t1 and
-// 240+-t2 with t1 max 177, t2 max 236  ->  x 142..497, y 4..476.
-const int kPanelL = 142, kPanelR = 497, kPanelT = 4, kPanelB = 476;
-
-// spectrum window (beige field) and bars
-const int kSpecL = 148, kSpecT = 102, kSpecR = 492;
-const int kSpecAxisY = 236;             // cyan frequency axis line
-const int kBars = memoirs::kSpectrumBands;                   // 43 columns, 7px wide, pitch 8
-const int kBarW = 7, kBarPitch = 8;
-const int kBarBaseY = 232;              // y2 of segment 0 (=408-176)
-const int kSegH = 2;                    // y1 = y2-2, step 3
-
-// title: static strip (reference frames a/b are pixel-identical here, so the
-// original has no per-frame title animation; the glitch look is in the atlas)
-const int kTitleX = 160, kTitleY = 32;  // sub_518BA8(32,160): a3=Y, a4=X
-
-// EXIT: sub_5193E8(1,1, 280, 168) -> a4=Y, a5=X
-const int kExitX = 168, kExitY = 280;
-
-// TR grid: x = 168+56*col, y = 296+16*row (col-major, index = col*10+row)
-const int kGridX = 168, kGridY = 296, kGridCol = 56, kGridRow = 16;
-const int kGridCols = 5, kGridRows = 10;
-
-// info lines: (220,256) and (220,264); hint at (144,472)
-const int kInfoX = 220, kInfoY1 = 256, kInfoY2 = 264;
-const int kHintX = 144, kHintY = 472;
+// The scene painter lives in scene.cpp (shared with the WASM build); this
+// file is the Win32 shell: window, input, audio playlist, backbuffer and
+// the shell-owned overlays (archive / settings CJK pages).
+const int kLogicalW = scene::kLogicalWidth;
+const int kLogicalH = scene::kLogicalHeight;
 
 // ---- themes -------------------------------------------------------------
 // Screen RGB sampled from game frames for the "Original" preset; the packed
@@ -66,28 +41,11 @@ const int kHintX = 144, kHintY = 472;
 int g_themeIdx = 0;
 static inline const Theme& Th() { return kThemes[g_themeIdx]; }
 
-// Legacy names kept so the painting code reads unchanged; they now resolve
-// through the active theme.
 #define kColOuter     (Th().outer)
-#define kColPanel     (Th().panel)
-#define kColStrip     (Th().strip)
-#define kColStripHot  (Th().stripHot)
-#define kColBar       (Th().bar)
-#define kColBarLit    (Th().barLit)
-#define kColFrame     (Th().frame)
-#define kColWave      (Th().wave)
-#define kColSelBase   (Th().selBase)
-#define kColSelEdge   (Th().selEdge)
-#define kColSelFoot   (Th().selFoot)
-
-// run-length vector tables for title / axis (drawn as crisp scaled rects)
-#include "themed_art_runs.h"
-
-// spectrum band-edge seam columns (logical x), tinted toward Th().seam
-const int kSeamX[8] = { 171, 195, 243, 291, 339, 387, 435, 475 };
-const char* kFreqLabel[8] = { "52", "110", "540", "1060", "2080", "4160", "12K", "22K" };
 
 const char* kTitle = "SOUND MEMOIRS";
+
+#include "themed_art_runs.h"
 
 // ---- sweep / FFT -------------------------------------------------------
 
@@ -228,6 +186,9 @@ bool PointInRect(const RECT& r, int x, int y) {
     return x >= r.left && x < r.right && y >= r.top && y < r.bottom;
 }
 
+// Shell rect fill (letterbox margins, archive page, seek preview). The
+// shared scene painter uses the gfx backend instead; this direct GDI helper
+// stays for the few shell-owned draws outside the shared painter.
 void FillRectCol(HDC dc, int l, int t, int r, int b, COLORREF c) {
     RECT rc;
     rc.left = l; rc.top = t; rc.right = r; rc.bottom = b;
@@ -236,119 +197,10 @@ void FillRectCol(HDC dc, int l, int t, int r, int b, COLORREF c) {
     DeleteObject(br);
 }
 
-// Draw a run-length vector table (2x source coords) as crisp scaled rects.
-// ox,oy = logical origin of the artwork; col0/col1 = theme colors for c=0/1.
-void DrawRuns(HDC dc, const ArtRun* runs, int n, float ox, float oy,
-              COLORREF col0, COLORREF col1) {
-    for (int c = 0; c < 2; ++c) {
-        HBRUSH br = CreateSolidBrush(c == 0 ? col0 : col1);
-        for (int i = 0; i < n; ++i) {
-            if (runs[i].c != c) continue;
-            RECT rc;
-            rc.left = Sf(ox + runs[i].x * 0.5f);
-            rc.top = Sf(oy + runs[i].y * 0.5f);
-            rc.right = Sf(ox + (runs[i].x + runs[i].w) * 0.5f);
-            rc.bottom = Sf(oy + (runs[i].y + 1) * 0.5f);
-            // never let rounding collapse a thin stroke to zero size
-            if (rc.right <= rc.left) rc.right = rc.left + 1;
-            if (rc.bottom <= rc.top) rc.bottom = rc.top + 1;
-            FillRect(dc, &rc, br);
-        }
-        DeleteObject(br);
-    }
-}
-
-COLORREF LerpCol(COLORREF a, COLORREF b, float t) {
-    if (t <= 0.0f) return a;
-    if (t >= 1.0f) return b;
-    return RGB((int)(GetRValue(a) + (GetRValue(b) - GetRValue(a)) * t),
-               (int)(GetGValue(a) + (GetGValue(b) - GetGValue(a)) * t),
-               (int)(GetBValue(a) + (GetBValue(b) - GetBValue(a)) * t));
-}
-
-int ClampI(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
-
-// Constant-alpha blit of a solid color over a rect (GDI has no alpha fill).
-void AlphaFill(HDC dc, int l, int t, int r, int b, COLORREF c, int alpha) {
-    if (alpha <= 0) return;
-    static HDC srcDC = NULL;
-    static HBITMAP srcBmp = NULL;
-    if (!srcDC) {
-        srcDC = CreateCompatibleDC(NULL);
-        srcBmp = CreateBitmap(1, 1, 1, 32, NULL);
-        SelectObject(srcDC, srcBmp);
-    }
-    SetPixel(srcDC, 0, 0, c);
-    BLENDFUNCTION bf = { AC_SRC_OVER, 0, (BYTE)(alpha > 255 ? 255 : alpha), 0 };
-    AlphaBlend(dc, l, t, r - l, b - t, srcDC, 0, 0, 1, 1, bf);
-}
-
-void HLine(HDC dc, int x0, int x1, int y, COLORREF c, int w = 1) {
-    HPEN p = CreatePen(PS_SOLID, w, c);
-    HGDIOBJ old = SelectObject(dc, p);
-    MoveToEx(dc, x0, y, NULL);
-    LineTo(dc, x1, y);
-    SelectObject(dc, old);
-    DeleteObject(p);
-}
-
-void VLine(HDC dc, int y0, int y1, int x, COLORREF c, int w = 1) {
-    HPEN p = CreatePen(PS_SOLID, w, c);
-    HGDIOBJ old = SelectObject(dc, p);
-    MoveToEx(dc, x, y0, NULL);
-    LineTo(dc, x, y1);
-    SelectObject(dc, old);
-    DeleteObject(p);
-}
-
 // ---- themed bitmap art --------------------------------------------------
-// Glyph shapes / proportions come from the original 8x11 cell atlas (and the
-// title / axis artwork) so layout stays exactly as tuned.  Crispness at any
-// resolution comes from NEAREST-NEIGHBOR stretching (no blur), and themes
-// recolor the art by remapping its source palette to the active theme.
-// Per-theme art is pre-rendered offline (tools/make_themed_art.py) into BMP
-// resources, so the runtime never touches DIB byte order: it just loads the
-// themed bitmap and nearest-neighbor stretches it.
-struct ArtSet {
-    HDC dc[kThemeCount];
-    HBITMAP bmp[kThemeCount];
-    bool built;
-    ArtSet() : built(false) {
-        for (int i = 0; i < kThemeCount; ++i) { dc[i] = 0; bmp[i] = 0; }
-    }
-    void Load(int baseId) {
-        if (built) return;
-        for (int t = 0; t < kThemeCount; ++t) {
-            bmp[t] = LoadBitmapA(GetModuleHandleA(NULL), MAKEINTRESOURCEA(baseId + t));
-            dc[t] = CreateCompatibleDC(NULL);
-            SelectObject(dc[t], bmp[t]);
-        }
-        built = true;
-    }
-};
-
-ArtSet g_atlas;
-HDC PanelAtlas() {return g_atlas.dc[g_themeIdx];}
-
-void EnsureArt() {
-    g_atlas.Load(110);      // cells_<theme> (grid/info/hints pixel font)
-}
-
-// ---- fixed-pitch cell text --------------------------------------------
-// palette: 0 normal, 1 selection band, 2 dim, 3 no-underline (info lines).
-// The selection cream band is drawn full-cell-width by PaintSelection.
-void DrawCells(HDC dc, const std::string& text, int x, int y, int palette = 0,
-               bool /*underline*/ = false) {
-    static const std::string cells = "ABCDEFGHIJKLNMOPQRSTUVWXYZ 0123456789_-.:;&<>*+";
-    SetStretchBltMode(dc, COLORONCOLOR);
-    for (char ch : text) {
-        size_t index = cells.find(ch);
-        if (index == std::string::npos) index = cells.find(' ');
-        StretchBlt(dc, S(x - 4), S(y - 5), S(8), S(11),
-                   g_atlas.dc[g_themeIdx], (int)index * 8, palette * 11, 8, 11, SRCCOPY);
-        x += 8;
-    }
-}
+// The themed cell atlas (resources cells_<theme>, base id 110) is owned by
+// the GDI gfx backend; the shell's text path (DrawPanelText) borrows it.
+HDC PanelAtlas() { return gfx_win32_atlas(g_themeIdx); }
 
 // ---- audio / tracks (unchanged behaviour) ------------------------------
 void EnsureAudio() {
@@ -569,21 +421,25 @@ void MoveSelection(int dcol, int drow) {
         InvalidateRect(app.hwnd, NULL, FALSE);
         return;
     }
-    int col = app.selected / kGridRows;
-    int row = app.selected % kGridRows;
+    // The selection grid is always the original 5x10 layout, whatever
+    // composition is currently displayed.
+    const layout::TracksGeom& tg = layout::tracks(layout::Original);
+    const int gridRows = tg.rows, gridCols = tg.cols;
+    int col = app.selected / gridRows;
+    int row = app.selected % gridRows;
     col += dcol;
     row += drow;
     if (row < 0) {
-        if (col > 0) { col--; row = kGridRows - 1; }
+        if (col > 0) { col--; row = gridRows - 1; }
         else { app.selected = kExitIndex; InvalidateRect(app.hwnd, NULL, FALSE); return; }
     }
-    if (row >= kGridRows) {
-        if (col < kGridCols - 1) { col++; row = 0; }
-        else row = kGridRows - 1;
+    if (row >= gridRows) {
+        if (col < gridCols - 1) { col++; row = 0; }
+        else row = gridRows - 1;
     }
     if (col < 0) col = 0;
-    if (col > kGridCols - 1) col = kGridCols - 1;
-    int idx = col * kGridRows + row;
+    if (col > gridCols - 1) col = gridCols - 1;
+    int idx = col * gridRows + row;
     if (idx < 0) idx = 0;
     if (idx >= kTrackCount) idx = kTrackCount - 1;
     app.selected = idx;
@@ -598,267 +454,8 @@ void UpdateVisualization() {
 }
 
 // ---- painting ----------------------------------------------------------
-void PaintBackdrop(HDC dc) {
-    FillRectCol(dc, 0, 0, S(kLogicalW), S(kLogicalH), kColOuter);
-}
-
-// Level meter (asm 0x7F1E43..0x7F20DA): count = abs(int(env/32767*90));
-// env here is already normalized, so count = int(env*90).  When count > 0
-// the loop draws i = 0..count INCLUSIVE (count+1 stripes); the `cmp 2Dh` at
-// 0x7F1ED0 is a dead compare, not a 45-cell cap — i > 44 only switches the
-// packed color 0xFF2B1022 -> 0xFF44161E.  Stripe i: y 473-8i .. 479-8i,
-// left x 4..138, right x 502..636.  Left meter reads the RIGHT channel
-// (same array as the left waveform), right meter reads the LEFT channel.
-void PaintLevelMeter(HDC dc) {
-    PlayerApp& app = g_app;
-    int nL = (int)(app.spectrum.envL * 90.0f);
-    int nR = (int)(app.spectrum.envR * 90.0f);
-    for (int i = 0; i <= nL && nL > 0; ++i) {
-        int y2 = 479 - 8 * i, y1 = 473 - 8 * i;
-        FillRectCol(dc, S(4), S(y1), S(138), S(y2), i > 44 ? kColStripHot : kColStrip);
-    }
-    for (int i = 0; i <= nR && nR > 0; ++i) {
-        int y2 = 479 - 8 * i, y1 = 473 - 8 * i;
-        FillRectCol(dc, S(502), S(y1), S(636), S(y2), i > 44 ? kColStripHot : kColStrip);
-    }
-}
-
-// 240-point audio waveform polyline at x=70 (left) / x=570 (right),
-// y = 2*i, i = 0..239 (sub_497ECC line calls inside sub_7EEAD8).
-void PaintSideWave(HDC dc) {
-    PlayerApp& app = g_app;
-    if (app.current < 0) return;
-    HPEN pen = CreatePen(PS_SOLID, 2, kColWave);
-    HGDIOBJ old = SelectObject(dc, pen);
-    POINT pts[240];
-    for (int side = 0; side < 2; ++side) {
-        float base = side == 0 ? 70.0f : 570.0f;
-        for (int i = 0; i < 240; ++i) {
-            float dx = side == 0 ? app.spectrum.waveL[i] : app.spectrum.waveR[i];
-            pts[i].x = S((int)(base + dx));
-            pts[i].y = S(2 * i);
-        }
-        Polyline(dc, pts, 240);
-    }
-    SelectObject(dc, old);
-    DeleteObject(pen);
-}
-
-// Panel frame: four lines at x=320-t1-1 / 320+t1, y=240-t2 / 240+t2 where
-// t1 = clamp(4*n32,0,128)/128*177 and t2 = clamp(4*n32-128,0,128)/128*236.
-// n32 advances once per 60 fps frame; fully expanded after 64 frames (~1.07 s).
-void PaintFrame(HDC dc) {
-    PlayerApp& app = g_app;
-    int c = (int)app.tick;
-    if (c > 64) c = 64;
-    int n1 = c * 4;
-    if (n1 > 128) n1 = 128;
-    int n2 = c * 4 - 128;
-    if (n2 < 0) n2 = 0;
-    if (n2 > 128) n2 = 128;
-    int t1 = (int)((float)n1 / 128.0f * 177.0f);
-    int t2 = (int)((float)n2 / 128.0f * 236.0f);
-    int xl = 320 - t1 - 1, xr = 320 + t1;
-    int yt = 240 - t2, yb = 240 + t2;
-    VLine(dc, S(yt), S(yb), S(xl), kColFrame, 2);
-    VLine(dc, S(yt), S(yb), S(xr), kColFrame, 2);
-    HLine(dc, S(xl), S(xr), S(yt), kColFrame, 2);
-    HLine(dc, S(xl), S(xr), S(yb), kColFrame, 2);
-}
-
-void PaintSpectrum(HDC dc, const layout::SpecGeom& g) {
-    PlayerApp& app = g_app;
-    const int t = (int)app.tick;
-    // entrance fades (n32-keyed alphas in the original):
-    //   bg quad   clamp(3n32-128,0,128)   grid bands clamp(12n32-512,0,192)
-    //   axis      clamp(4n32-256,0,255)   labels     clamp(20n32-800,0,255)
-    float bgA = ClampI(3 * t - 128, 0, 128) / 128.0f;
-    float seamA = ClampI(12 * t - 512, 0, 192) / 192.0f;
-    int axisA = ClampI(4 * t - 256, 0, 255);
-    int labelA = ClampI(20 * t - 800, 0, 255);
-
-    COLORREF panel = LerpCol(kColOuter, kColPanel, bgA);
-    FillRectCol(dc, S(g.l), S(g.t), S(g.r), S(g.axisY), panel);
-
-    // band seams: 1px columns tinted toward the theme seam color
-    for (int i = 0; i < 8; ++i) {
-        COLORREF c = LerpCol(panel, Th().seam, seamA);
-        VLine(dc, S(g.t), S(g.axisY), S(kSeamX[i]), c, max(1, S(1)));
-    }
-
-    // 43 columns: current level (tex 88) from the compressed level, decay
-    // tail (tex 87) from the OLD smoothed state down to level/4.
-    const int kBars = g.bars;
-    for (int k = 0; k < kBars; ++k) {
-        int level = (int)app.spectrum.barsLevel[k];
-        int old = (int)app.spectrum.barsPrev[k];
-        int x1 = S(g.l + g.pitch * k);
-        int x2 = S(g.l + g.pitch * k + g.barW);
-        if (level > 3) {
-            int segs = (level >> 2) + 1;
-            for (int m = 0; m < segs; ++m) {
-                int y2 = g.barBase - 3 * m;
-                int y1 = y2 - kSegH;
-                FillRectCol(dc, x1, S(y1), x2, S(y2), kColBar);
-            }
-        }
-        if (old > 3 && (old >> 2) > level / 4) {
-            int segs = (old >> 2) - level / 4 + 1;
-            for (int m = 0; m < segs; ++m) {
-                int mm = level / 4 + m;
-                int y2 = g.barBase - 3 * mm;
-                int y1 = y2 - kSegH;
-                FillRectCol(dc, x1, S(y1), x2, S(y2), kColBarLit);
-            }
-        }
-    }
-
-    // frequency axis: solid vector cyan line + chunky pixel-font labels drawn
-    // from the atlas orange row (palette 4), matching the original weight.
-    if (axisA > 0) {
-        COLORREF fc = LerpCol(panel, Th().frame, axisA / 255.0f);
-        FillRectCol(dc, S(g.l), S(g.axisY), S(g.r), S(g.axisY + 2), fc);
-    }
-    if (labelA > 0) {
-        for (int i = 0; i < 8; ++i) {
-            int len = (int)strlen(kFreqLabel[i]);
-            DrawCells(dc, kFreqLabel[i], kSeamX[i] - 4 * len + 4, g.axisY + 4, 4);
-        }
-    }
-}
-
-void PaintTitle(HDC dc) {
-    // drawn as vector runs (crisp at any resolution), not a bitmap blit
-    DrawRuns(dc, kTitleRuns, kTitleRunsN, 152, 18,
-             Th().title, Th().titleBlock);
-}
-
-// Selection cursor: 56x16 cell at x = 156+56*col, y = 288+16*row (EXIT row
-// y = 272..288).  Amber margins around the glyph band (band drawn by the
-// caller via DrawCells palette 1).  Position jumps instantly.
-void PaintSelection(HDC dc, const layout::TracksGeom& g, int col, int row) {
-    int x = g.gridX - 12 + g.colW * col;
-    int y = g.gridY - 8 + g.rowH * row;
-    // original 5-frame pulse: margins brighten on phases 2..4
-    bool pulse = (g_app.tick % 5) >= 2;
-    COLORREF base = pulse ? LerpCol(kColSelBase, RGB(255, 255, 255), 0.12f) : kColSelBase;
-    COLORREF edge = pulse ? LerpCol(kColSelEdge, RGB(255, 255, 255), 0.12f) : kColSelEdge;
-    COLORREF foot = pulse ? LerpCol(kColSelFoot, RGB(255, 255, 255), 0.12f) : kColSelFoot;
-    FillRectCol(dc, S(x), S(y), S(x + g.colW), S(y + g.rowH), base);
-    // cream glyph band: ONE full-width horizontal strip across the cell
-    FillRectCol(dc, S(x), S(y + 3), S(x + g.colW), S(y + 14), Th().selBand);
-    FillRectCol(dc, S(x), S(y), S(x + g.colW), S(y + 1), edge);
-    FillRectCol(dc, S(x), S(y + 14), S(x + g.colW), S(y + 15), foot);
-}
-
-// The flashing white light is a horizontal STRIPE inside the orange block
-// (not a filled sub-block): a centered translucent white bar whose height
-// pulses 0,2,4,6,8 over the original 5-frame cycle = the selection blink.
-void PaintSelectionStripe(HDC dc, const layout::TracksGeom& g) {
-    PlayerApp& app = g_app;
-    int col, row;
-    if (app.selected == kExitIndex) { col = 0; row = -1; }
-    else { col = app.selected / g.rows; row = app.selected % g.rows; }
-    int x = g.gridX - 12 + g.colW * col;
-    int y = g.gridY - 8 + g.rowH * row;
-    int h = 2 * (int)(app.tick % 5);
-    if (h <= 0) return;
-    int cy = y + 8;
-    AlphaFill(dc, S(x + 1), S(cy - h / 2), S(x + g.colW - 1), S(cy - h / 2 + h),
-              Th().selStripe, 0x60);
-}
-
-void PaintExit(HDC dc, const layout::TracksGeom& g) {
-    bool selected = g_app.selected == kExitIndex;
-    if (selected) PaintSelection(dc, g, 0, -1);
-    DrawCells(dc, "EXIT", g.exitX, g.exitY, selected ? 1 : 0, true);
-}
-
-void PaintGridLabel(HDC dc, int idx, int x, int y, bool selected) {
-    char label[8];
-    snprintf(label, sizeof(label), "TR:%02d", idx);
-    DrawCells(dc, label, x, y, selected ? 1 : 0, true);
-}
-
-void PaintGrid(HDC dc, const layout::TracksGeom& g) {
-    PlayerApp& app = g_app;
-    for (int col = 0; col < g.cols; ++col) {
-        for (int row = 0; row < g.rows; ++row) {
-            int idx = col * g.rows + row;
-            if (idx >= kTrackCount) continue;
-            if (app.selected == idx) PaintSelection(dc, g, col, row);
-            int x = g.gridX + g.colW * col;
-            int y = g.gridY + g.rowH * row;
-            PaintGridLabel(dc, idx, x, y, app.selected == idx);
-        }
-    }
-}
-
-void PaintInfo(HDC dc, const layout::TracksGeom& g) {
-    PlayerApp& app = g_app;
-    const int x = g.infoX, y1 = g.infoY1, y2 = g.infoY2;
-
-    std::string line1;
-    if (app.loading) {
-        line1 = "<LOADING>";
-    } else if (app.current == kTrackCount) {
-        line1 = "NOW PLAYING : ";
-        if (app.localIndex >= 0 && app.localIndex < (int)app.playlist.size()) {
-            const std::wstring& p = app.playlist[app.localIndex];
-            size_t pos = p.find_last_of(L"/\\");
-            std::wstring name = p.substr(pos + 1);
-            std::string narrow;
-            for (wchar_t c : name) {
-                if (c >= L'a' && c <= L'z') c -= 32;
-                narrow += (c >= 32 && c < 127) ? (char)c : '?';
-            }
-            if (narrow.size() > 24) narrow = narrow.substr(0, 24);
-            line1 += narrow;
-        } else {
-            line1 += "LOCAL FILE";
-        }
-    } else if (app.current < 0) {
-        line1 = "<SILENCE>";
-    } else {
-        char buf[32];
-        snprintf(buf, sizeof(buf), "NOW PLAYING : TRACK %02d", app.current);
-        line1 = buf;
-    }
-
-    char timeBuf[64];
-    int secs = (int)app.audio.positionSeconds();
-    if (secs < 0) secs = 0;
-    snprintf(timeBuf, sizeof(timeBuf), "PLAY TIME   : %02dSEC", secs);
-    std::string line2 = timeBuf;
-
-    // Line 1 includes the "NOW PLAYING" prefix, so a 24-character local title
-    // used to make the underline 34 logical pixels wider than the content box.
-    const int lineLeft=x-4, lineRight=486;
-    const int line1Capacity=max(0,(lineRight-lineLeft)/8);
-    if((int)line1.size()>line1Capacity) {
-        if(line1Capacity>=3) line1.replace(line1Capacity-3,std::string::npos,"...");
-        else line1.resize(line1Capacity);
-    }
-
-    // no-underline cells; the underline is ONE continuous horizontal strip
-    // per line drawn AFTER both lines (line 2's opaque cells would otherwise
-    // overwrite line 1's baked underline).  VOL/theme sit past the strip.
-    if (app.current == kTrackCount && app.localIndex >= 0 && app.localIndex < (int)app.playlist.size() &&
-        basenameW(app.playlist[app.localIndex]).find_first_not_of(L"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 ._-()") != std::wstring::npos)
-        lineText(dc,lineLeft,y1-7,lineRight,y1+4,basenameW(app.playlist[app.localIndex]),Th().digit);
-    else DrawCells(dc, line1, x, y1, 3);
-    DrawCells(dc, line2, x, y2, 3);
-    int w1 = (int)line1.size() * 8;
-    HLine(dc, S(lineLeft), S(lineLeft) + S(w1), S(y1 + 4), Th().underline, max(1, S(1)));
-    HLine(dc, S(lineLeft), S(lineLeft) + S(19 * 8), S(y2 + 4), Th().underline, max(1, S(1)));
-}
-
-void PaintHints(HDC dc, const layout::TracksGeom& g) {
-    PlayerApp& app = g_app;
-    // 0x7EF2DE: (dword_86690C/24)%2 picks the half-alpha blink variant.
-    int palette = ((app.tick / 24) % 2) ? 2 : 0;
-    DrawCells(dc, "<MAINSHOT: LOOPPLAY> <SUBWEAPON: STOP>", g.hintX, g.hintY, palette);
-}
+// All scene painting now lives in the shared scene.cpp (see SceneHost below
+// for the shell-owned overlays that stay in this file).
 
 void EnsureBackBuffer(PlayerApp& app, HDC refDC) {
     RECT cr;
@@ -888,7 +485,6 @@ void EnsureBackBuffer(PlayerApp& app, HDC refDC) {
     app.backH = bh;
     SetBkMode(app.backDC, TRANSPARENT);
     SetStretchBltMode(app.backDC, COLORONCOLOR);
-    EnsureArt();
 }
 
 // --shot: dump the finished back buffer as a 24bpp bottom-up BMP so layout
@@ -958,53 +554,6 @@ void FillShotSpectrum(PlayerApp& app) {
 using lib::tr;
 void panelBox(HDC dc,int x,int y,int r,int b,COLORREF c) { FillRectCol(dc,S(x),S(y),S(r),S(b),c); }
 void noteRailActivity() { lastRailActivityTick = g_app.tick; }
-float channelRailOpacity() {
-    if (hoverChannel >= 0) return 1.0f;
-    const unsigned idle = g_app.tick - lastRailActivityTick;
-    if (idle <= kRailIdleDelayFrames) return 1.0f;
-    if (idle >= kRailIdleDelayFrames + kRailFadeFrames) return 0.0f;
-    return 1.0f - float(idle - kRailIdleDelayFrames) / kRailFadeFrames;
-}
-void channelRail(HDC dc) {
-    const int left=S(railX-4), top=S(272);
-    const int right=S(railX+3*channelWidth+4), bottom=S(288);
-    const int width=right-left, height=bottom-top;
-    const float opacity=channelRailOpacity();
-    const bool fading=opacity<0.999f;
-    static HDC savedDC=nullptr;
-    static HBITMAP savedBmp=nullptr;
-    static int savedW=0,savedH=0;
-    if(fading) {
-        if(savedW!=width || savedH!=height) {
-            if(savedBmp) DeleteObject(savedBmp);
-            if(savedDC) DeleteDC(savedDC);
-            savedDC=CreateCompatibleDC(dc);
-            savedBmp=CreateCompatibleBitmap(dc,width,height);
-            SelectObject(savedDC,savedBmp);
-            savedW=width;savedH=height;
-        }
-        BitBlt(savedDC,0,0,width,height,dc,left,top,SRCCOPY);
-    }
-    static const char* labels[]={"TR","LIB","SYS"};
-    for(int i=0;i<3;++i) {
-        int x=railX+i*channelWidth;
-        bool active=i==int(page);
-        if(page==Page::System) {
-            const wchar_t* configChannels[]={L"TR",L"LIB",L"SYS"};
-            lineText(dc,x+5,273,x+38,287,configChannels[i],active?Th().digit:Th().ink);
-        } else DrawCells(dc,labels[i],x+8,280,active?0:2);
-        if(i==hoverChannel && !active) panelBox(dc,x+4,286,x+30,287,Th().underline);
-        if(active) {
-            panelBox(dc,x,276,x+2,284,Th().bar);
-            panelBox(dc,x,285,x+5,286,Th().bar);
-        }
-    }
-    if(fading) {
-        const int cover=ClampI((int)((1.0f-opacity)*255.0f+0.5f),0,255);
-        BLENDFUNCTION blend={AC_SRC_OVER,0,(BYTE)cover,0};
-        AlphaBlend(dc,left,top,width,height,savedDC,0,0,width,height,blend);
-    }
-}
 std::wstring stamp(double seconds) {
     int s=max(0,(int)seconds);wchar_t t[32];swprintf_s(t,L"%02d:%02d",s/60,s%60);return t;
 }
@@ -1107,492 +656,102 @@ void moveCursor(int delta) {
     if(!matches.empty()) cursor=std::clamp(cursor+delta,0,(int)matches.size()-1);
 }
 void playCursor() { if(!matches.empty()) OpenMusic(g_app.playlist[matches[cursor]]); }
-void PaintWings(HDC dc,int style,const stage::Memory& motion){
-    if(style==1){ PaintLevelMeter(dc); PaintSideWave(dc); return; }
-    const auto& t=Th();
-    for(int side=0;side<2;++side){
-        int base=side?570:70;
-        const float* wave=side?g_app.spectrum.waveR:g_app.spectrum.waveL;
-        if(style==3){
-            POINT upper[220],lower[220];
-            for(int j=0;j<220;j++){
-                float v=wave[j], lag=wave[(j+12)%220];
-                int center=base+int(.58f*v), w=3+int(.37f*std::abs(v-lag));
-                int y=26+2*j;
-                upper[j]={S(center-w),S(y)};lower[j]={S(center+w),S(y)};
-                if(j%5==0)FillRectCol(dc,S(center-w),S(y),S(center+w+1),S(y+1),t.strip);
-            }
-            HGDIOBJ old=SelectObject(dc,GetStockObject(DC_PEN));
-            SetDCPenColor(dc,t.wave);Polyline(dc,upper,220);
-            SetDCPenColor(dc,t.bar);Polyline(dc,lower,220);SelectObject(dc,old);
-        }else{
-            const int span=2+int(61*std::clamp(motion.wing[side],0.f,1.f));
-            for(int row=0;row<44;row++){
-                float peak=0;
-                for(int j=0;j<5;j++)peak=std::max(peak,std::abs(wave[row*5+j]));
-                const float contour=.34f+.66f*sqrt(std::min(1.f,peak/64.f));
-                int width=2+int((span-2)*contour), y=27+row*10;
-                if(style==2){
-                    const float heat=std::clamp(contour*.62f+motion.wing[side]*.38f,0.f,1.f);
-                    const COLORREF ink=row&1
-                        ?LerpCol(t.wave,t.underline,.62f+.16f*heat)
-                        :LerpCol(t.wave,t.bar,.08f+.34f*heat);
-                    FillRectCol(dc,S(base-width),S(y),S(base+width),S(y+2),ink);
-                    const int length=row%5==0?5:2;
-                    const COLORREF tick=row%5==0
-                        ?LerpCol(t.hint,t.bar,.34f+.34f*heat)
-                        :LerpCol(t.hint,t.underline,.42f+.22f*heat);
-                    for(int edge:{-64,63}){
-                        const int x=base+edge;
-                        FillRectCol(dc,S(x),S(y),S(x+(edge<0?length:-length)),S(y+1),tick);
-                    }
-                }else{
-                    for(int col=0;col<12;col++){
-                        int x=base+(side?-1:1)*(col*10-55);
-                        bool lit=col*5+2<width;
-                        FillRectCol(dc,S(x-2),S(y-1),S(x+(lit?3:0)),S(y+(lit?3:1)),
-                            lit?(col>8?t.bar:t.wave):LerpCol(t.outer,t.wave,.30f));
-                    }
-                }
-            }
-        }
-        DrawCells(dc,side?"CH : L":"CH : R",base-20,13,3);
-    }
-}
-// ---- composition: full-frame field -------------------------------------
-// No panel frame and no side wings: the spectrum becomes a symmetric
-// full-width field with the title floating in a corner.  TAB raises the
-// original TR grid on top so selection keeps the original coordinates.
-void PaintFieldLayout(HDC dc) {
+// ---- shared scene bridge -----------------------------------------------
+// Pack the shell globals into the platform-independent snapshot and drive
+// the shared painter through the GDI backend. The host hooks keep the
+// shell-owned overlays (archive / settings CJK pages, Fusion Pixel titles)
+// at the exact paint positions the former inline code used.
+void PackSceneState(SceneState& st) {
     PlayerApp& app = g_app;
-    const auto& t = Th();
-    FillRectCol(dc, 0, 0, S(kLogicalW), S(kLogicalH),
-                LerpCol(t.outer, t.panel, 0.55f));
-
-    const int baseY = 340;
-    FillRectCol(dc, 0, S(baseY), S(kLogicalW), S(baseY + 2),
-                LerpCol(t.frame, t.outer, 0.42f));
-
-    const int cols = memoirs::kSpectrumBands;
-    const int pitch = 14, barW = 12;
-    const int x0 = (kLogicalW - cols * pitch) / 2;
-    for (int k = 0; k < cols; ++k) {
-        const float lv = std::clamp(app.spectrum.barsLevel[k] / 96.0f, 0.f, 1.f);
-        const int x1 = x0 + k * pitch, x2 = x1 + barW;
-        const int up = int(lv * 258);
-        if (up > 1) {
-            FillRectCol(dc, S(x1), S(baseY - up), S(x2), S(baseY),
-                        LerpCol(t.bar, t.wave, 0.42f));
-            FillRectCol(dc, S(x1), S(baseY - up), S(x2), S(baseY - up + 3), t.barLit);
+    st.spectrum = app.spectrum;
+    st.wing[0] = stageMemory.wing[0];
+    st.wing[1] = stageMemory.wing[1];
+    st.tick = (int)app.tick;
+    st.selected = app.selected;
+    st.current = app.current;
+    for (int i = 0; i < kTrackCount; ++i) st.available[i] = app.tracks[i].ok ? 1 : 0;
+    st.theme = g_themeIdx;
+    st.stageMode = app.settings->stageMode;
+    st.wingMode = app.settings->wingMode;
+    st.layoutMode = app.settings->layoutMode;
+    st.page = int(page);
+    st.hoverChannel = hoverChannel;
+    st.seconds = app.audio.positionSeconds();
+    st.localFile = (app.current == kTrackCount) ? 1 : 0;
+    st.loading = app.loading ? 1 : 0;
+    st.railActivityTick = (int)lastRailActivityTick;
+    st.switchTick = (int)switchedAt;
+    st.showGridOverlay = fieldGrid ? 1 : 0;
+    st.duration = app.current == kTrackCount ? app.audio.durationSeconds() : 0.0;
+    // Uppercased ASCII fallback of the local title for the shared atlas
+    // path; the host hook below still paints the true name (Fusion Pixel
+    // font) whenever it contains non-ASCII characters.
+    memset(st.localTitle, 0, sizeof(st.localTitle));
+    if (st.localFile && app.localIndex >= 0 && app.localIndex < (int)app.playlist.size()) {
+        std::wstring name = basenameW(app.playlist[app.localIndex]);
+        std::string narrow;
+        for (wchar_t c : name) {
+            if (c >= L'a' && c <= L'z') c -= 32;
+            narrow += (c >= 32 && c < 127) ? (char)c : '?';
         }
-        const int down = int(lv * 46);
-        if (down > 1) {
-            FillRectCol(dc, S(x1), S(baseY + 2), S(x2), S(baseY + 2 + down),
-                        LerpCol(t.bar, t.panel, 0.55f));
-        }
-    }
-
-    // frequency ticks and labels sit below the mirrored tail
-    for (int i = 0; i < 8; ++i) {
-        const int x = 48 + i * 78;
-        FillRectCol(dc, S(x), S(baseY + 4), S(x + 1), S(baseY + 50),
-                    LerpCol(t.frame, t.outer, 0.55f));
-        const int len = (int)strlen(kFreqLabel[i]);
-        DrawCells(dc, kFreqLabel[i], x - 4 * len + 4, baseY + 52, 4);
-    }
-
-    // Channel traces: left channel above the baseline, right below, so the
-    // two never paint over each other.
-    POINT pts[120];
-    for (int side = 0; side < 2; ++side) {
-        const float* wv = side ? app.spectrum.waveR : app.spectrum.waveL;
-        for (int i = 0; i < 120; ++i) {
-            const float v = std::clamp(wv[i * 2] / 64.0f, -1.f, 1.f);
-            pts[i].x = S(i * kLogicalW / 119);
-            pts[i].y = S(baseY + (side ? 2 + int(v * 62) : -2 - int(v * 62)));
-        }
-        HGDIOBJ old = SelectObject(dc, GetStockObject(DC_PEN));
-        SetDCPenColor(dc, side ? LerpCol(t.wave, t.outer, 0.38f) : t.wave);
-        Polyline(dc, pts, 120);
-        SelectObject(dc, old);
-    }
-
-    DrawCells(dc, "SOUND MEMOIRS", 24, 24, 0);
-    {
-        const char* themeName = t.name;
-        const int w = (int)strlen(themeName) * 8;
-        DrawCells(dc, themeName, 616 - w, 24, 2);
-    }
-
-    std::string now;
-    if (app.current == kTrackCount) now = "NOW PLAYING : LOCAL FILE";
-    else if (app.current >= 0) {
-        char b[48];
-        snprintf(b, sizeof(b), "NOW PLAYING : TRACK %02d", app.current);
-        now = b;
-    } else now = "<SILENCE>";
-    DrawCells(dc, now, 24, 452, 3);
-    {
-        char tb[32];
-        int secs = max(0, (int)app.audio.positionSeconds());
-        snprintf(tb, sizeof(tb), "TIME : %02dSEC", secs);
-        DrawCells(dc, tb, 616 - (int)strlen(tb) * 8, 452, 3);
-    }
-    DrawCells(dc, "TAB GRID / F9 LAYOUT", 24, 466, 2);
-    {
-        char sb[16];
-        snprintf(sb, sizeof(sb), "SEL:TR:%02d", std::max(0, app.selected));
-        DrawCells(dc, sb, 616 - (int)strlen(sb) * 8, 466, 2);
-    }
-
-    if (fieldGrid) {
-        AlphaFill(dc, 0, 0, S(kLogicalW), S(kLogicalH), RGB(10, 12, 16), 0x8C);
-        FillRectCol(dc, S(148), S(266), S(492), S(kLogicalH), t.outer);
-        const layout::TracksGeom& g = TG();
-        PaintExit(dc, g);
-        PaintGrid(dc, g);
-        PaintSelectionStripe(dc, g);
-        DrawCells(dc, "TAB CLOSE", 24, 466, 2);
+        if (narrow.size() > 24) narrow = narrow.substr(0, 24);
+        memcpy(st.localTitle, narrow.c_str(), std::min(narrow.size(), sizeof(st.localTitle) - 1));
     }
 }
 
-// ---- composition: vertical three-column rack ---------------------------
-// A 24px title bar over three columns: channel meters, the main display and
-// the full 46-track list.  Nothing is borrowed from the original panel frame.
-void PaintStackLayout(HDC dc) {
-    PlayerApp& app = g_app;
-    const auto& t = Th();
-    FillRectCol(dc, 0, 0, S(kLogicalW), S(kLogicalH), LerpCol(t.outer, t.panel, 0.35f));
-
-    FillRectCol(dc, 0, 0, S(kLogicalW), S(24), t.panel);
-    FillRectCol(dc, 0, S(23), S(kLogicalW), S(24), t.frame);
-    DrawCells(dc, "SOUND MEMOIRS", 16, 8, 0);
-    { const char* nm = t.name; DrawCells(dc, nm, 616 - (int)strlen(nm) * 8, 8, 2); }
-
-    // left: two channel meters, bottom-up
-    for (int side = 0; side < 2; ++side) {
-        const int x1 = side ? 44 : 18, x2 = side ? 56 : 30;
-        const int n = std::clamp(int((side ? app.spectrum.envR : app.spectrum.envL) * 60.0f), 0, 60);
-        for (int i = 0; i < n; ++i) {
-            const int y2 = 440 - i * 6;
-            FillRectCol(dc, S(x1), S(y2 - 5), S(x2), S(y2),
-                        i > 44 ? t.stripHot : t.strip);
-        }
-        DrawCells(dc, side ? "R" : "L", x1 + 1, 446, 2);
-    }
-
-    // centre display
-    const int cl = 96, ct = 32, cr = 400, cb = 440;
-    FillRectCol(dc, S(cl), S(ct), S(cr), S(cb), LerpCol(t.panel, t.outer, 0.30f));
-    FillRectCol(dc, S(cl), S(ct), S(cr), S(ct + 1), t.frame);
-    FillRectCol(dc, S(cl), S(cb - 1), S(cr), S(cb), t.frame);
-    FillRectCol(dc, S(cl), S(ct), S(cl + 1), S(cb), t.frame);
-    FillRectCol(dc, S(cr - 1), S(ct), S(cr), S(cb), t.frame);
-
-    const int baseY = 330;
-    const int cols = memoirs::kSpectrumBands;
-    const int pitch = 6, barW = 5;
-    const int x0 = cl + 1 + ((cr - cl - 2) - cols * pitch) / 2;
-    for (int k = 0; k < cols; ++k) {
-        const float lv = std::clamp(app.spectrum.barsLevel[k] / 96.0f, 0.f, 1.f);
-        const int x1 = x0 + k * pitch, x2 = x1 + barW;
-        const int up = int(lv * 238);
-        if (up > 1) {
-            FillRectCol(dc, S(x1), S(baseY - up), S(x2), S(baseY),
-                        LerpCol(t.wave, t.bar, 0.40f));
-            FillRectCol(dc, S(x1), S(baseY - up), S(x2), S(baseY - up + 2), t.barLit);
-        }
-        const int down = int(lv * 22);
-        if (down > 1)
-            FillRectCol(dc, S(x1), S(baseY + 1), S(x2), S(baseY + 1 + down),
-                        LerpCol(t.bar, t.panel, 0.58f));
-    }
-
-    // lower half: the two channel traces
-    POINT pts[120];
-    for (int side = 0; side < 2; ++side) {
-        const float* wv = side ? app.spectrum.waveR : app.spectrum.waveL;
-        const int cy = side ? 416 : 392;
-        for (int i = 0; i < 120; ++i) {
-            const float v = std::clamp(wv[i * 2] / 64.0f, -1.f, 1.f);
-            pts[i].x = S(cl + 4 + i * (cr - cl - 8) / 119);
-            pts[i].y = S(cy + int(v * 18));
-        }
-        HGDIOBJ old = SelectObject(dc, GetStockObject(DC_PEN));
-        SetDCPenColor(dc, side ? LerpCol(t.wave, t.bar, 0.45f) : t.wave);
-        Polyline(dc, pts, 120);
-        SelectObject(dc, old);
-    }
-    DrawCells(dc, "FIELD / 43 BAND", cl + 4, ct + 4, 2);
-
-    // right: full track list, two columns of 23
-    const int listX = 408, listY = 40, colW = 108, rowH = 17;
-    for (int i = 0; i < kTrackCount; ++i) {
-        const int col = i / 23, row = i % 23;
-        const int x = listX + col * colW, y = listY + row * rowH;
-        const bool sel = app.selected == i;
-        if (sel) {
-            FillRectCol(dc, S(x), S(y), S(x + colW - 6), S(y + rowH - 2),
-                        LerpCol(t.selBand, t.panel, 0.30f));
-            FillRectCol(dc, S(x), S(y), S(x + 3), S(y + rowH - 2), t.bar);
-        }
-        char b[8];
-        snprintf(b, sizeof(b), "TR:%02d", i);
-        DrawCells(dc, b, x + 8, y + 3, sel ? 0 : 2);
-    }
-
-    // bottom rail: seek + time + hint
-    FillRectCol(dc, S(cl), S(452), S(cr), S(454), t.seam);
-    const double dur = app.current == kTrackCount ? app.audio.durationSeconds() : 0.0;
-    const double pos = dur > 0 ? app.audio.positionSeconds() : 0.0;
-    const int end = cl + int((cr - cl) * std::clamp(pos / (dur > 0 ? dur : 1.0), 0.0, 1.0));
-    if (end > cl) FillRectCol(dc, S(cl), S(452), S(end), S(454), t.bar);
-    {
-        char tb[32];
-        snprintf(tb, sizeof(tb), "TIME : %02dSEC", std::max(0, int(pos)));
-        DrawCells(dc, tb, 632 - (int)strlen(tb) * 8, 460, 3);
-    }
-    DrawCells(dc, "F7 VISUAL / F8 WING / F9 LAYOUT", cl, 460, 2);
-}
-
-// ---- composition: circular instrument dial -----------------------------
-// The 43 bands radiate from a ring instead of a horizontal window; the 46
-// tracks become tick marks around the outside so the whole screen reads as
-// one dial.  TAB is not needed here.
-void PaintRingLayout(HDC dc) {
-    PlayerApp& app = g_app;
-    const auto& t = Th();
-    const float kPi = 3.14159265f;
-    const int cx = 320, cy = 236;
-    FillRectCol(dc, 0, 0, S(kLogicalW), S(kLogicalH), LerpCol(t.outer, t.panel, 0.42f));
-
-    // concentric guide rings
-    auto ring = [&](int radius, COLORREF c, int thick) {
-        const int segs = 120;
-        for (int i = 0; i < segs; ++i) {
-            const float a = 2.f * kPi * i / segs;
-            const int x = cx + int(radius * cosf(a));
-            const int y = cy + int(radius * sinf(a));
-            FillRectCol(dc, S(x), S(y), S(x + thick), S(y + thick), c);
-        }
-    };
-    ring(96, LerpCol(t.frame, t.outer, 0.35f), 1);
-    ring(126, LerpCol(t.frame, t.outer, 0.20f), 1);
-    ring(196, LerpCol(t.seam, t.outer, 0.30f), 1);
-
-    // 43 radial band blocks, starting at 12 o'clock
-    const int bands = memoirs::kSpectrumBands;
-    for (int k = 0; k < bands; ++k) {
-        const float lv = std::clamp(app.spectrum.barsLevel[k] / 96.0f, 0.f, 1.f);
-        const int blocks = 2 + int(lv * 10.f);
-        const float a = -kPi / 2.f + 2.f * kPi * k / bands;
-        for (int b = 0; b < blocks; ++b) {
-            const int r = 132 + b * 6;
-            const int x = cx + int(r * cosf(a)) - 1;
-            const int y = cy + int(r * sinf(a)) - 1;
-            const COLORREF c = (b == blocks - 1) ? t.bar
-                              : LerpCol(t.wave, t.bar, 0.28f);
-            FillRectCol(dc, S(x), S(y), S(x + 3), S(y + 3), c);
-        }
-    }
-
-    // centre: phase diamond with up to three decayed traces
-    {
-        POINT frame[] = {{S(cx), S(cy - 38)}, {S(cx + 46), S(cy)}, {S(cx), S(cy + 38)},
-                         {S(cx - 46), S(cy)}, {S(cx), S(cy - 38)}};
-        HGDIOBJ old = SelectObject(dc, GetStockObject(DC_PEN));
-        SetDCPenColor(dc, t.frame);
-        Polyline(dc, frame, 5);
-        // XY plot of the two channels: the classic vector-display figure
-        {
-            POINT pts2[120];
-            for (int i = 0; i < 120; ++i) {
-                const float l = std::clamp(app.spectrum.waveL[i * 2] / 64.f, -1.f, 1.f);
-                const float r = std::clamp(app.spectrum.waveR[i * 2] / 64.f, -1.f, 1.f);
-                pts2[i] = {S(cx + int(l * 34)), S(cy - int(r * 34))};
-            }
-            SetDCPenColor(dc, t.bar);
-            Polyline(dc, pts2, 120);
-        }
-        SetDCPenColor(dc, t.bar);
-        FillRectCol(dc, S(cx - 1), S(cy - 1), S(cx + 2), S(cy + 2), t.bar);
-        SelectObject(dc, old);
-    }
-
-    // 46 track ticks on the outside
-    for (int i = 0; i < kTrackCount; ++i) {
-        const float a = -kPi / 2.f + 2.f * kPi * i / kTrackCount;
-        const int x = cx + int(206 * cosf(a));
-        const int y = cy + int(206 * sinf(a));
-        const bool sel = app.selected == i;
-        const int halfW = sel ? 3 : 2, halfH = sel ? 6 : 3;
-        FillRectCol(dc, S(x - halfW), S(y - halfH), S(x + halfW), S(y + halfH),
-                    sel ? t.bar : LerpCol(t.seam, t.ink, 0.55f));
-    }
-
-    DrawCells(dc, "SOUND MEMOIRS", 152, 14, 0);
-    { const char* nm = t.name; DrawCells(dc, nm, 632 - (int)strlen(nm) * 8, 14, 2); }
-
-    {
-        char b[16];
-        snprintf(b, sizeof(b), "TR:%02d", std::max(0, app.selected));
-        DrawCells(dc, b, cx - (int)strlen(b) * 4, 446, app.selected < kTrackCount ? 0 : 2);
-    }
-    DrawCells(dc, "F7 VISUAL / F9 LAYOUT", 196, 462, 2);
-}
-
-// ---- composition: crosshair / vector display ---------------------------
-// Four axes leave a centre window: title above, progress below, one channel
-// trace left and right.  TAB raises the original TR grid like Field does.
-void PaintCrossLayout(HDC dc) {
-    PlayerApp& app = g_app;
-    const auto& t = Th();
-    FillRectCol(dc, 0, 0, S(kLogicalW), S(kLogicalH), LerpCol(t.outer, t.panel, 0.48f));
-
-    const int cx = 320, cy = 240;
-    const COLORREF axis = LerpCol(t.frame, t.outer, 0.66f);
-    FillRectCol(dc, S(cx - 1), S(24), S(cx + 1), S(456), axis);
-    FillRectCol(dc, S(24), S(cy - 1), S(616), S(cy + 1), axis);
-
-    for (int y = 40; y < 456; y += 40) {
-        FillRectCol(dc, S(cx - 6), S(y), S(cx - 1), S(y + 1), t.seam);
-        FillRectCol(dc, S(cx + 1), S(y), S(cx + 6), S(y + 1), t.seam);
-    }
-    for (int x = 40; x < 616; x += 40) {
-        FillRectCol(dc, S(x), S(cy - 6), S(x + 1), S(cy - 1), t.seam);
-        FillRectCol(dc, S(x), S(cy + 1), S(x + 1), S(cy + 6), t.seam);
-    }
-
-    // channel traces ride above (left) and below (right) the horizontal axis
-    POINT pts[120];
-    for (int side = 0; side < 2; ++side) {
-        const float* wv = side ? app.spectrum.waveR : app.spectrum.waveL;
-        const int sway = side ? 26 : -26;
-        const int x0 = side ? 392 : 24;
-        for (int i = 0; i < 120; ++i) {
-            const float v = std::clamp(wv[i * 2] / 64.0f, -1.f, 1.f);
-            pts[i].x = S(x0 + i * 224 / 119);
-            pts[i].y = S(cy + sway + int(v * 16));
-        }
-        HGDIOBJ old = SelectObject(dc, GetStockObject(DC_PEN));
-        SetDCPenColor(dc, side ? LerpCol(t.wave, t.bar, 0.45f) : t.wave);
-        Polyline(dc, pts, 120);
-        SelectObject(dc, old);
-    }
-
-    // centre window: phase diamond over up to three decayed traces
-    {
-        POINT frame[] = {{S(cx), S(cy - 40)}, {S(cx + 48), S(cy)}, {S(cx), S(cy + 40)},
-                         {S(cx - 48), S(cy)}, {S(cx), S(cy - 40)}};
-        HGDIOBJ old = SelectObject(dc, GetStockObject(DC_PEN));
-        SetDCPenColor(dc, t.frame);
-        Polyline(dc, frame, 5);
-        // XY plot of the two channels inside the diamond
-        {
-            POINT pts2[120];
-            for (int i = 0; i < 120; ++i) {
-                const float l = std::clamp(app.spectrum.waveL[i * 2] / 64.f, -1.f, 1.f);
-                const float r = std::clamp(app.spectrum.waveR[i * 2] / 64.f, -1.f, 1.f);
-                pts2[i] = {S(cx + int(l * 40)), S(cy - int(r * 40))};
-            }
-            SetDCPenColor(dc, t.bar);
-            Polyline(dc, pts2, 120);
-        }
-        SelectObject(dc, old);
-    }
-
-    // progress runs down the lower axis
-    {
-        const double dur = app.current == kTrackCount ? app.audio.durationSeconds() : 0.0;
-        const double pos = dur > 0 ? app.audio.positionSeconds() : 0.0;
-        const int len = int(192.0 * std::clamp(pos / (dur > 0 ? dur : 1.0), 0.0, 1.0));
-        FillRectCol(dc, S(cx - 3), S(264), S(cx + 3), S(264 + len), t.bar);
-    }
-
-    DrawCells(dc, "SOUND MEMOIRS", 24, 20, 0);
-    { const char* nm = t.name; DrawCells(dc, nm, 616 - (int)strlen(nm) * 8, 20, 2); }
-    DrawCells(dc, "EXIT", 24, 300, app.selected == kExitIndex ? 1 : 2);
-
-    {
-        char b[24];
-        snprintf(b, sizeof(b), "TR:%02d", std::max(0, app.selected));
-        DrawCells(dc, b, cx - (int)strlen(b) * 4, 466, 0);
-    }
-    DrawCells(dc, "TAB GRID / F9 LAYOUT", 24, 466, 2);
-
-    if (fieldGrid) {
-        AlphaFill(dc, 0, 0, S(kLogicalW), S(kLogicalH), RGB(10, 12, 16), 0x8C);
-        FillRectCol(dc, S(148), S(266), S(492), S(kLogicalH), t.outer);
-        const layout::TracksGeom& g = TG();
-        PaintExit(dc, g);
-        PaintGrid(dc, g);
-        PaintSelectionStripe(dc, g);
-        DrawCells(dc, "TAB CLOSE", 24, 466, 2);
-    }
-}
-
-void PaintScene(HDC dc) {
-    SetBkMode(dc, TRANSPARENT);
-    const int layoutMode = g_app.settings->layoutMode;
-    if (page == Page::Tracks) {
-        if (layoutMode == layout::Field) { PaintFieldLayout(dc); return; }
-        if (layoutMode == layout::Stack) { PaintStackLayout(dc); return; }
-        if (layoutMode == layout::Ring) { PaintRingLayout(dc); return; }
-        if (layoutMode == layout::Cross) { PaintCrossLayout(dc); return; }
-    }
-    PaintBackdrop(dc);
-    const int mode=g_app.settings->stageMode;
-    PaintWings(dc,g_app.settings->wingMode?g_app.settings->wingMode:mode+1,stageMemory);
-    PaintFrame(dc);
-    if(!mode) PaintSpectrum(dc, SG());
-    else {
-        const auto& t=Th();
-        stage::paint({t.panel,LerpCol(t.seam,t.wave,.48f),t.wave,t.bar,t.frame},dc,g_scale,mode,g_app.spectrum,stageMemory);
-        const char* marks[]={"","ORBIT : 01","STRATA : 02","PHASE : 03"};
-        DrawCells(dc,marks[mode],152,74,3);
-    }
-    PaintTitle(dc);
-    if(page==Page::System) {
+struct DesktopHost : SceneHost {
+    void drawArchiveBody() override { archivePaint(g_app.backDC); }
+    void drawSystemPanel() override {
         const config_panel::State state = {
             settingRow, g_app.settings->volume, Th().name,
             lib::language(), g_app.settings->libFont,
             layout::name(g_app.settings->layoutMode, lib::language())
         };
         const config_panel::DrawContext drawing = {
-            dc, g_scale, PanelAtlas(),
+            g_app.backDC, g_scale, PanelAtlas(),
             {Th().panel, Th().frame, Th().bar, Th().ink, Th().strip,
              Th().stripHot, Th().seam, Th().outer, Th().digit, Th().selEdge}
         };
         config_panel::Paint(drawing, state);
     }
-    else if(page==Page::Library) archivePaint(dc);
-    else {
-        const layout::TracksGeom& g = TG();
-        PaintInfo(dc, g);
-        PaintExit(dc, g);
-        PaintGrid(dc, g);
-        PaintSelectionStripe(dc, g);
-        PaintHints(dc, g);
+    bool drawLocalFileTitle() override {
+        PlayerApp& app = g_app;
+        if (!(app.current == kTrackCount && app.localIndex >= 0 &&
+              app.localIndex < (int)app.playlist.size()))
+            return false;
+        const std::wstring name = basenameW(app.playlist[app.localIndex]);
+        // Pure-ASCII names go through the shared cell atlas; anything else
+        // keeps the desktop Fusion Pixel rendering of the original code.
+        if (name.find_first_not_of(
+                L"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 ._-()")
+            == std::wstring::npos)
+            return false;
+        lineText(g_app.backDC, 216, 249, 486, 260, name, Th().digit);
+        return true;
     }
-    channelRail(dc);
-    if(hoverChannel>=0) {
-        const wchar_t* hints[]={tr(L"F1   Original jukebox",L"F1   原版点唱机",L"F1   原版ジュークボックス"),
-            tr(L"F2   Local archive",L"F2   本地曲库",L"F2   ローカル音楽庫"),
-            tr(L"F3   System settings",L"F3   系统设置",L"F3   システム設定")};
-        panelBox(dc,144,462,495,478,Th().outer);
-        lineText(dc,154,462,486,478,hints[hoverChannel],Th().digit,DT_RIGHT);
+    void drawChannelRailText(int channel, bool active) override {
+        static const wchar_t* configChannels[] = { L"TR", L"LIB", L"SYS" };
+        const int x = railX + channel * channelWidth;
+        lineText(g_app.backDC, x + 5, 273, x + 38, 287, configChannels[channel],
+                 active ? Th().digit : Th().ink);
     }
-    unsigned age=g_app.tick-switchedAt;
-    if(switchedAt && age<12) {
-        int y=290+int(age)*14;
-        panelBox(dc,150,y,490,y+1,Th().frame);
+    void drawHoverHint(int channel) override {
+        const wchar_t* hints[] = {
+            tr(L"F1   Original jukebox", L"F1   原版点唱机", L"F1   原版ジュークボックス"),
+            tr(L"F2   Local archive", L"F2   本地曲库", L"F2   ローカル音楽庫"),
+            tr(L"F3   System settings", L"F3   系统设置", L"F3   システム設定")
+        };
+        lineText(g_app.backDC, 154, 462, 486, 478, hints[channel], Th().digit, DT_RIGHT);
     }
-    // entrance: near-black tint (packed 0x100408) fading out over the first
-    // 32 frames via fullscreen quad alpha clamp(8*n32,0,255).  The original
-    // also has a late white flash (tex 290, mode 14) not reproduced here.
-    int t = (int)g_app.tick;
-    if (t < 32)
-        AlphaFill(dc, 0, 0, S(kLogicalW), S(kLogicalH), RGB(8, 4, 16), 255 - ClampI(8 * t, 0, 255));
+};
+
+void PaintScene(HDC dc) {
+    gfx_bind(dc);
+    SceneState st;
+    memset(&st, 0, sizeof(st));
+    PackSceneState(st);
+    DesktopHost host;
+    sceneRender(st, g_scale, stageMemory, &host);
 }
 
 void OnPaint(HWND hwnd) {

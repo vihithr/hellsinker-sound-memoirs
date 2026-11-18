@@ -6,4 +6,6 @@
 
 主线复用桌面端的 PAK、解码和频谱 C++ 实现。完整曲库由用户选择的数据决定；同名资源按 loose WAV → bbll → bbt3 → bbt2 → bbt → loose OGG 解析。界面沿用原版 640×480 布局，不包括 Windows 的 SYS、本地曲库持久化、Media Foundation 格式或完整启动动画。单曲输入上限 96 MiB，目前在 Worker 内整曲解码。
 
-图像和曲序由 `python tools/make_wasm_assets.py` 从 Windows 同源素材生成。第三方声明见播放器根目录 THIRD_PARTY_NOTICES.md。另一套 Web 主题实验在 web/，不属于本版本。
+图像和曲序由 `python tools/make_wasm_assets.py` 从 Windows 同源素材生成。第三方声明见播放器根目录 THIRD_PARTY_NOTICES.md。
+
+`web/` 目录是**纯 JS 探索支线，无需与桌面主线同步**：它不参与一比一复刻，也不共用绘制代码，仅作视觉实验。本 WASM 主线与桌面端共用 `src/scene.cpp` + `src/gfx.h` 双后端，是唯一的复刻实现。

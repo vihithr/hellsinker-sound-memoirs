@@ -6,7 +6,7 @@ import { Worker, parentPort, workerData } from "node:worker_threads";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const coreDir = path.dirname(fileURLToPath(import.meta.url));
-const coreMjs = path.join(coreDir, "core.mjs");
+const coreMjs = path.join(coreDir, "core.js");
 const coreWasm = path.join(coreDir, "core.wasm");
 const pakHeaderLength = 0x203A4;
 const spectrumFloats = 43 * 3 + 240 * 2 + 2;
@@ -14,7 +14,7 @@ const spectrumFloats = 43 * 3 + 240 * 2 + 2;
 async function instantiateCore() {
     const moduleUrl = pathToFileURL(coreMjs).href;
     const factory = (await import(moduleUrl)).default;
-    assert.equal(typeof factory, "function", "core.mjs must default-export the factory");
+    assert.equal(typeof factory, "function", "core.js must default-export the factory");
     const core = await factory({ wasmBinary: readFileSync(coreWasm) });
 
     for (const name of [

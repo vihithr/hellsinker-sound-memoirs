@@ -1,4 +1,4 @@
-import factory from "./core/core.mjs";
+import factory from "./core/core.js";
 const ready = factory();
 const HEADER = 0x203a4;
 const text = new TextDecoder();

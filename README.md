@@ -57,7 +57,9 @@
 
 ### 浏览器与跨平台开发
 
-[TR / WASM 播放器](wasm/README.md) 使用同一套 C++ 索引、解码和频谱算法；导入自己的 PAK 或 WAV / OGG 即可使用。[Web 视觉实验](web/README.md) 是另一个独立入口，用来比较仪表和档案主题。模块边界、平台评估与测试入口见[架构说明](docs/architecture.md)。
+[TR / WASM 播放器](wasm/README.md) 是浏览器一比一复刻主线，与桌面端共用同一套 C++ 绘制与算法代码（`src/scene.cpp` + `src/gfx.h` 双后端）；导入自己的 PAK 或 WAV / OGG 即可使用。
+
+[Web 视觉实验](web/README.md) 是**纯 JS 探索支线，无需与桌面主线同步**：它不参与一比一复刻，也不共用绘制代码，仅用于比较仪表与档案主题。模块边界、平台评估与测试入口见[架构说明](docs/architecture.md)。
 
 ![BLUEPRINT 配色](docs/screenshot-blueprint.png)
 

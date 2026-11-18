@@ -7,12 +7,6 @@
 // file-scope constants can read them from here without changing a pixel.
 #pragma once
 
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-
-#include <windows.h>
-
 #include "library.h"
 
 namespace layout {

@@ -8,13 +8,17 @@ $ErrorActionPreference = "Stop"
 
 $RepoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\.."))
 $CoreSource = Join-Path $RepoRoot "src\core"
+$SrcRoot = Join-Path $RepoRoot "src"
 $BuildRoot = Join-Path $RepoRoot "obj\wasm-core"
 $TempRoot = Join-Path $RepoRoot "obj\wasm-temp"
 $EmsdkRoot = Join-Path $RepoRoot "obj\emsdk"
 $EmsdkBat = Join-Path $EmsdkRoot "emsdk.bat"
 $Emcc = Join-Path $EmsdkRoot "upstream\emscripten\emcc.bat"
 $Emxx = Join-Path $EmsdkRoot "upstream\emscripten\em++.bat"
-$OutputMjs = Join-Path $PSScriptRoot "core.mjs"
+# Emit the ES module as core.js so any static server (including
+# `python -m http.server`) serves it with a JavaScript MIME type. `.mjs` is
+# served as text/plain by Python's default handler and breaks ES imports.
+$OutputMjs = Join-Path $PSScriptRoot "core.js"
 $OutputWasm = Join-Path $PSScriptRoot "core.wasm"
 
 function Invoke-Checked {
@@ -29,11 +33,19 @@ function Invoke-Checked {
     }
 }
 
+# The scene painter is shared with the desktop build: src/scene.cpp drives
+# src/stage.cpp and src/layout.cpp through the gfx primitives implemented by
+# the WASM backend (wasm/core/gfx_wasm.cpp). The former derived copies under
+# wasm/render are no longer compiled.
 $RequiredSources = @(
     (Join-Path $CoreSource "pak_index.cpp"),
     (Join-Path $CoreSource "decoder.cpp"),
     (Join-Path $CoreSource "spectrum.cpp"),
     (Join-Path $RepoRoot "stb_vorbis.c"),
+    (Join-Path $SrcRoot "scene.cpp"),
+    (Join-Path $SrcRoot "stage.cpp"),
+    (Join-Path $SrcRoot "layout.cpp"),
+    (Join-Path $PSScriptRoot "gfx_wasm.cpp"),
     (Join-Path $PSScriptRoot "api.cpp")
 )
 foreach ($Source in $RequiredSources) {
@@ -75,13 +87,18 @@ $CommonFlags = @(
     "-O3",
     "-DNDEBUG",
     "-DSTB_VORBIS_NO_STDIO",
-    "-I$CoreSource"
+    "-I$CoreSource",
+    "-I$SrcRoot"
 )
 
 $CppSources = @(
     (Join-Path $CoreSource "pak_index.cpp"),
     (Join-Path $CoreSource "decoder.cpp"),
     (Join-Path $CoreSource "spectrum.cpp"),
+    (Join-Path $SrcRoot "scene.cpp"),
+    (Join-Path $SrcRoot "stage.cpp"),
+    (Join-Path $SrcRoot "layout.cpp"),
+    (Join-Path $PSScriptRoot "gfx_wasm.cpp"),
     (Join-Path $PSScriptRoot "api.cpp")
 )
 $CppObjects = @()
@@ -108,7 +125,15 @@ $Exports = @(
     "_samples",
     "_clear_pcm",
     "_sm_spectrum",
-    "_sm_spectrum_reset"
+    "_sm_spectrum_reset",
+    "_scene_state_size",
+    "_scene_begin",
+    "_scene_set_state",
+    "_scene_advance",
+    "_scene_render",
+    "_scene_commands",
+    "_scene_points",
+    "_scene_count"
 ) -join ","
 
 $LinkFlags = @(
@@ -137,11 +162,11 @@ Invoke-Checked $Emxx ($LinkFlags + $CppObjects + @($StbObject, "-o", $OutputMjs)
 
 if (-not (Test-Path -LiteralPath $OutputMjs -PathType Leaf) -or
     -not (Test-Path -LiteralPath $OutputWasm -PathType Leaf)) {
-    throw "Build completed without producing core.mjs and core.wasm."
+    throw "Build completed without producing core.js and core.wasm."
 }
 
 $Mjs = Get-Item -LiteralPath $OutputMjs
 $Wasm = Get-Item -LiteralPath $OutputWasm
 Write-Host "Emscripten $EmsdkVersion"
-Write-Host "core.mjs  $($Mjs.Length) bytes"
+Write-Host "core.js   $($Mjs.Length) bytes"
 Write-Host "core.wasm $($Wasm.Length) bytes"
