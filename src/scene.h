@@ -46,3 +46,8 @@ void sceneAdvance(SceneState& s, stage::Memory& memory, int id, double seconds,
 // passes 1.0). `host` may be null.
 void sceneRender(const SceneState& s, float scale, const stage::Memory& memory,
                  SceneHost* host = nullptr);
+
+// Replace the LIB archive list with `count` fixed-width (40-byte) ASCII
+// records read from `pool`. Passing count <= 0 clears the list, which makes
+// the painter show its "no local tracks" hint instead of placeholder rows.
+void sceneSetLocalNames(const char* pool, int count);

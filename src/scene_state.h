@@ -51,6 +51,8 @@ struct SceneState {
     int layoutNameLen;
     int searchText[32];           // UTF-32 code points of LIB search query
     int searchTextLen;
+    int libCurrentRow;            // LIB row index of the playing local track
+                                  // (-1 when no local track is active)
 };
 
 // JS writes scalar fields at these fixed byte offsets. A layout change must
@@ -89,4 +91,5 @@ static_assert(offsetof(SceneState, layoutName) == 2776, "layoutName offset");
 static_assert(offsetof(SceneState, layoutNameLen) == 2840, "layoutNameLen offset");
 static_assert(offsetof(SceneState, searchText) == 2844, "searchText offset");
 static_assert(offsetof(SceneState, searchTextLen) == 2972, "searchTextLen offset");
-static_assert(sizeof(SceneState) == 2976, "SceneState size");
+static_assert(offsetof(SceneState, libCurrentRow) == 2976, "libCurrentRow offset");
+static_assert(sizeof(SceneState) == 2984, "SceneState size (8-byte aligned)");

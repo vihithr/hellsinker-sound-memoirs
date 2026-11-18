@@ -15,19 +15,19 @@ body {
   image-rendering: pixelated; image-rendering: crisp-edges;
   touch-action: none; outline: none; background: #d9e3e0;
 }
-/* Floating side rail: slides in from the right edge on interaction and
-   slides back out when idle, so the replica view stays untouched. */
+/* Floating side rail: hidden entirely while idle (no slide-out residue),
+   shown only while the user is interacting with the replica. */
 #aux {
   position: absolute; right: 0; top: 50%;
-  transform: translateY(-50%) translateX(110%);
-  display: flex; flex-direction: column; gap: 5px;
+  transform: translateY(-50%);
+  display: none;
+  flex-direction: column; gap: 5px;
   padding: 10px 5px; max-height: 92vh;
   border: 1px solid #7a9; border-right: none; border-radius: 7px 0 0 7px;
-  background: rgba(12,20,30,.88);
-  transition: transform .3s ease;
-  pointer-events: none; z-index: 6;
+  background: rgba(12,20,30,.9);
+  z-index: 6;
 }
-#aux.visible { transform: translateY(-50%) translateX(0); pointer-events: auto; }
+#aux.visible { display: flex; }
 #aux button {
   width: 38px; height: 38px; border-radius: 5px;
   border: 1px solid #7a9; background: rgba(20,32,44,.85); color: #dfe;

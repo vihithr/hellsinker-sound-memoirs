@@ -136,7 +136,10 @@ $Exports = @(
     "_scene_count",
     "_scene_texts",
     "_scene_text_points",
-    "_scene_text_count"
+    "_scene_text_count",
+    "_scene_set_local_names",
+    "_scene_local_name_width",
+    "_scene_local_name_max"
 ) -join ","
 
 $LinkFlags = @(

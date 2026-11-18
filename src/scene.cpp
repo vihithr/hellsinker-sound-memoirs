@@ -59,6 +59,15 @@ static inline int Sf(float v) { return (int)(v * g_sceneScale + 0.5f); }
 const SceneState* g_state = nullptr;
 static inline const Theme& Th() { return kThemes[g_state->theme]; }
 
+// ---- LIB track-name pool ------------------------------------------------
+// The shell (browser or desktop) pushes the filtered local-track names here
+// so the archive page can list real file names. Fixed-width ASCII records:
+// the browser writes count*40 bytes of NUL-terminated names at once.
+constexpr int kLibNameMax = 64;
+constexpr int kLibNameWidth = 40;
+char g_libNames[kLibNameMax][kLibNameWidth] = {};
+int g_libNameCount = 0;
+
 #define kColOuter     (Th().outer)
 #define kColPanel     (Th().panel)
 #define kColStrip     (Th().strip)
@@ -996,24 +1005,28 @@ static void PaintArchivePage() {
         panelBox(154, y, 158, y + 1, t.frame);
         panelBox(160, y, 486, y + 1, t.strip);
     }
-    // track rows (ASCII fallback titles from localTitle slot)
+    // track rows (real file names from the shell's LIB pool)
     const int first = g_state->libScroll;
+    const int total = g_libNameCount;
+    if (total == 0) {
+        // No local tracks: say so instead of showing fake placeholder rows.
+        static const char* kLibEmpty[3] = {
+            "Drop music here or press + to add files",
+            "拖入音乐，或点 + 添加文件",
+            "音楽をドロップ、または + で追加",
+        };
+        textUtf8(kLibEmpty[L3], 154, 349, 486, 375, t.ink, GFX_ALIGN_CENTER);
+    }
     for (int row = 0; row < 7; ++row) {
         const int idx = first + row;
         const int y = 313 + row * 18;
-        if (idx >= 46) break;
+        if (idx >= total) break;
         const bool selected = idx == g_state->libCursor;
         if (selected) panelBox(154, y + 2, 157, y + 15, t.selEdge);
         char num[8]; std::snprintf(num, sizeof(num), "%03d", idx + 1);
         textUtf8(num, 161, y, 188, y + 17, t.digit);
-        char title[40];
-        if (idx == g_state->current && g_state->localTitle[0]) {
-            std::snprintf(title, sizeof(title), "%s", g_state->localTitle);
-        } else {
-            std::snprintf(title, sizeof(title), "LIB TRACK %03d", idx + 1);
-        }
-        textLib(title, 192, y, 464, y + 17, selected ? t.digit : t.ink);
-        if (local && idx == g_state->current) {
+        textLib(g_libNames[idx], 192, y, 464, y + 17, selected ? t.digit : t.ink);
+        if (idx == g_state->libCurrentRow) {
             for (int j = 0; j < 3; ++j) {
                 const int h = 2 + (j == 1 ? (int)g_state->spectrum.barsLevel[3 + j * 4] / 10 : 0);
                 panelBox(471 + j * 4, y + 14 - h, 473 + j * 4, y + 14, t.bar);
@@ -1026,7 +1039,13 @@ static void PaintArchivePage() {
     textUtf8(g_state->libPlaying && !g_state->libPaused ? kLibPause[L3] : kLibPlay[L3], 213, 443, 277, 460, t.digit);
     textUtf8(kLibStop[L3], 278, 443, 331, 460, t.digit);
     textUtf8("<", 341, 443, 375, 460, t.digit, GFX_ALIGN_CENTER);
-    textUtf8("1 / 1", 375, 443, 453, 460, t.ink, GFX_ALIGN_CENTER);
+    {
+        const int pages = total > 0 ? (total + 6) / 7 : 0;
+        const int shown = pages > 0 ? (first / 7) + 1 : 0;
+        char pageBuf[16];
+        std::snprintf(pageBuf, sizeof(pageBuf), "%d / %d", shown, pages);
+        textUtf8(pageBuf, 375, 443, 453, 460, t.ink, GFX_ALIGN_CENTER);
+    }
     textUtf8(">", 453, 443, 486, 460, t.digit, GFX_ALIGN_CENTER);
 }
 
@@ -1090,4 +1109,24 @@ void sceneRender(const SceneState& s, float scale, const stage::Memory& memory,
     const int t = (int)s.tick;
     if (t < 32)
         AlphaFill(0, 0, S(kLogicalW), S(kLogicalH), RGB(8, 4, 16), 255 - ClampI(8 * t, 0, 255));
+}
+
+// Shell entry point: replace the LIB list with `count` fixed-width ASCII
+// records read from `pool` (count * kLibNameWidth bytes).
+void sceneSetLocalNames(const char* pool, int count) {
+    if (!pool || count <= 0) {
+        g_libNameCount = 0;
+        for (int i = 0; i < kLibNameMax; ++i) g_libNames[i][0] = 0;
+        return;
+    }
+    if (count > kLibNameMax) count = kLibNameMax;
+    g_libNameCount = count;
+    for (int i = 0; i < kLibNameMax; ++i) {
+        if (i < count) {
+            const char* src = pool + (std::size_t)i * kLibNameWidth;
+            std::snprintf(g_libNames[i], kLibNameWidth, "%s", src);
+        } else {
+            g_libNames[i][0] = 0;
+        }
+    }
 }

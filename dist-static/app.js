@@ -16,6 +16,7 @@ function toggleFullscreen(){
   wakeAux();
 }
 $("aux-load")?.addEventListener("click",()=>{files.click();wakeAux();});
+$("aux-pause")?.addEventListener("click",()=>{togglePause();wakeAux();});
 $("aux-full")?.addEventListener("click",toggleFullscreen);
 $("aux-page")?.addEventListener("click",()=>{selectPage((page+1)%3);wakeAux();});
 $("aux-theme")?.addEventListener("click",()=>{cycleTheme();wakeAux();});
@@ -34,7 +35,46 @@ let tick=0,paused=false,railActivityTick=0,switchTick=0,showGridOverlay=false;
 let page=0; // 0=TR, 1=LIB, 2=SYS
 let settingRow=0,libFont=1;
 let libCursor=0,libScroll=0,searchText="",searchActive=false;
+let visible=[];  // indices into `locals` after the search filter
 function clampLibScroll(){if(libCursor<libScroll)libScroll=libCursor;if(libCursor>=libScroll+7)libScroll=libCursor-6;libScroll=Math.max(0,libScroll);}
+// Recompute the filtered LIB list and push it into the shared painter.
+function refreshVisible(){
+  const q=searchText.trim().toLowerCase();
+  visible=[];
+  for(let i=0;i<locals.length;i++) if(!q||locals[i].toLowerCase().includes(q)) visible.push(i);
+  if(libCursor>=visible.length) libCursor=Math.max(0,visible.length-1);
+  clampLibScroll();
+  pushLocalNames();
+}
+// Upload the visible names as fixed-width ASCII records for the C++ painter.
+function pushLocalNames(){
+  if(!vizCore||!vizCore._scene_set_local_names) return;
+  const W=40;
+  const max=vizCore._scene_local_name_max?vizCore._scene_local_name_max():64;
+  const count=Math.min(visible.length,max);
+  const bytes=new Uint8Array(W*(count||1));
+  for(let i=0;i<count;i++){
+    const name=locals[visible[i]]||"";
+    for(let k=0;k<W-1&&k<name.length;k++){
+      const c=name.charCodeAt(k);
+      bytes[i*W+k]=(c>=32&&c<127)?c:63; // ASCII-safe fallback
+    }
+  }
+  const ptr=vizCore._alloc(bytes.length);
+  if(!ptr) return;
+  vizCore.HEAPU8.set(bytes,ptr);
+  vizCore._scene_set_local_names(ptr,count);
+  vizCore._dealloc(ptr);
+}
+// Play the highlighted LIB row (cursor indexes the filtered list).
+function libPlayCursor(){
+  if(!visible.length) return;
+  const real=visible[libCursor];
+  if(real==null) return;
+  localIndex=real;
+  selected=names.length+real;
+  activate();
+}
 let lang=0; // 0=EN, 1=ZH, 2=JA
 let playlist=[],localIndex=-1,localOrder=0; // 0 sequential, 1 repeat-one, 2 repeat-all, 3 shuffle
 let scrubbing=false,scrubFraction=0,next=0,fatal=null,ready=false;
@@ -96,6 +136,14 @@ async function activate(){
   }catch(e){if(id===epoch){reset();}}
 }
 function seek(seconds){if(!buffer)return;offset=Math.max(0,Math.min(buffer.duration,seconds));if(source)start();}
+// Quick pause/resume for touch users: toggles whatever is currently playing.
+function togglePause(){
+  if(current===null||!buffer)return false;
+  if(!paused){offset=position();detach();paused=true;}
+  else{paused=false;start();}
+  refreshTitle();markRailActivity();
+  return true;
+}
 function setVolume(v){
   volume=Math.max(0,Math.min(100,v));
   if(gain)gain.gain.value=volume/100;
@@ -103,12 +151,15 @@ function setVolume(v){
 }
 function stop(){reset();}
 function stepLocal(delta){
-  const count=playlist.length;if(!count)return;
-  let idx=localIndex+delta;
-  if(localOrder===2)idx=(idx+count)%count;
-  else if(localOrder===3)idx=count<2?0:(idx+count)%count;
-  if(idx<0||idx>=count)return;
-  localIndex=idx;selected=names.length+idx;activate();
+  const count=visible.length;if(!count)return;
+  // Move within the filtered list, then map back to the real `locals` index.
+  let row=libCursor+delta;
+  if(localOrder===2)row=(row+count)%count;
+  else if(localOrder===3)row=count<2?0:(row+count)%count;
+  if(row<0||row>=count)return;
+  libCursor=row;clampLibScroll();
+  const real=visible[row];
+  localIndex=real;selected=names.length+real;activate();
 }
 function cycleTheme(){theme=(theme+1)%THEMES.length;refreshTitle();markRailActivity();}
 function cycleStage(){stageMode=(stageMode+1)%4;markRailActivity();}
@@ -166,11 +217,13 @@ screen.addEventListener("click",e=>{
   }
   if(page===1){ // LIB
     if(y>=293&&y<309){files.click();return;}
-    if(y>=313&&y<439){const row=Math.floor((y-313)/18);const idx=libScroll+row;if(idx>=0&&idx<playlist.length){libCursor=idx;markRailActivity();}return;}
+    if(y>=313&&y<439){const row=Math.floor((y-313)/18);const idx=libScroll+row;if(idx>=0&&idx<visible.length){libCursor=idx;markRailActivity();}return;}
     if(y>=443&&y<460){
       if(x>=154&&x<212){localOrder=(localOrder+1)%4;markRailActivity();return;}
-      if(x>=213&&x<277){if(buffer&&current!==null&&current>=names.length){offset=position();detach();paused=!paused;if(!paused)start();}return;}
+      if(x>=213&&x<277){togglePause();return;}
       if(x>=278&&x<331){stop();return;}
+      if(x>=341&&x<375){libCursor=Math.max(0,libCursor-7);clampLibScroll();return;}
+      if(x>=453&&x<486){libCursor=Math.min(Math.max(0,visible.length-1),libCursor+7);clampLibScroll();return;}
     }
     return;
   }
@@ -195,18 +248,19 @@ window.addEventListener("keydown",e=>{
     if(k==="l"||k==="L"){e.preventDefault();selectPage(page===1?0:1);return;}
   }
   if(k==="F1"||k==="F2"||k==="F3"){e.preventDefault();selectPage(k==="F1"?0:k==="F2"?1:2);return;}
-  if(page===1){ // LIB navigation
+  if(page===1){ // LIB navigation (operates on the filtered `visible` list)
+    const n=visible.length;
     if(k==="ArrowUp"){e.preventDefault();libCursor=Math.max(0,libCursor-1);clampLibScroll();markRailActivity();return;}
-    if(k==="ArrowDown"){e.preventDefault();libCursor=Math.min(playlist.length-1,libCursor+1);clampLibScroll();markRailActivity();return;}
+    if(k==="ArrowDown"){e.preventDefault();libCursor=Math.min(Math.max(0,n-1),libCursor+1);clampLibScroll();markRailActivity();return;}
     if(k==="PageUp"){e.preventDefault();libCursor=Math.max(0,libCursor-7);clampLibScroll();return;}
-    if(k==="PageDown"){e.preventDefault();libCursor=Math.min(playlist.length-1,libCursor+7);clampLibScroll();return;}
-    if(k==="Enter"){e.preventDefault();if(playlist.length){localIndex=libCursor;selected=names.length+libCursor;activate();}return;}
-    if(k===" "){e.preventDefault();if(buffer&&current!==null&&current>=names.length){offset=position();detach();paused=!paused;if(!paused)start();}return;}
+    if(k==="PageDown"){e.preventDefault();libCursor=Math.min(Math.max(0,n-1),libCursor+7);clampLibScroll();return;}
+    if(k==="Enter"){e.preventDefault();if(n){libPlayCursor();}return;}
+    if(k===" "){e.preventDefault();togglePause();return;}
     if(k==="ArrowLeft"||k==="ArrowRight"){e.preventDefault();seek(position()+(k==="ArrowLeft"?-5:5));return;}
-    if(k==="/"){e.preventDefault();searchText="";searchActive=true;return;}
-    if(searchActive&&k.length===1){searchText+=k;markRailActivity();return;}
-    if(k==="Backspace"&&searchActive){e.preventDefault();searchText=searchText.slice(0,-1);return;}
-    if(k==="Escape"){e.preventDefault();searchActive=false;selectPage(0);return;}
+    if(k==="/"){e.preventDefault();searchText="";searchActive=true;refreshVisible();return;}
+    if(searchActive&&k.length===1){searchText+=k;refreshVisible();markRailActivity();return;}
+    if(k==="Backspace"&&searchActive){e.preventDefault();searchText=searchText.slice(0,-1);refreshVisible();return;}
+    if(k==="Escape"){e.preventDefault();searchActive=false;refreshVisible();selectPage(0);return;}
     return;
   }
   if(page===2){ // SYS navigation
@@ -243,8 +297,13 @@ async function importFiles(picked){
   loading=true;refreshTitle();
   try{
     const result=await request("import",{files:picked,names});
-    available=result.available;locals=result.locals;playlist=result.locals.slice();localIndex=playlist.length?0:-1;
-    if(!canPlay(selected)){const i=available.findIndex(Boolean);selected=i>=0?i:playlist.length?names.length:0;}
+    available=result.available;locals=result.locals||[];playlist=locals.slice();
+    refreshVisible();
+    if(!canPlay(selected)){
+      const i=available.findIndex(Boolean);
+      selected=i>=0?i:(locals.length?names.length+visible[0]:0);
+    }
+    localIndex=locals.length?visible[0]:-1;
     markRailActivity();
   }catch(err){}
   loading=false;refreshTitle();
@@ -324,6 +383,8 @@ try{
       stateView.setInt32(2772,Math.round(position()*1000),true);
       for(let i=0;i<searchText.length&&i<32;i++)stateView.setInt32(2844+i*4,searchText.charCodeAt(i),true);
       stateView.setInt32(2972,searchText.length,true);
+      // Row index (within the filtered list) of the playing local track.
+      stateView.setInt32(2976,current!==null&&current>=names.length?visible.indexOf(current-names.length):-1,true);
 
       vizCore._scene_begin();
       vizCore._scene_set_state(statePtr);
@@ -340,6 +401,7 @@ try{
   if(h.includes("sys"))page=2;else if(h.includes("lib"))page=1;
   if(h.includes("settled"))tick=200; // skip entrance tint for deterministic capture
   loadFontForLang();
+  refreshVisible();   // seed the C++ LIB name pool (empty until files load)
   // Test hook: exposes state and synthesized canvas clicks for headless checks.
   window.__hsTest={
     get page(){return page;},
@@ -351,6 +413,12 @@ try{
     get stage(){return stageMode;},
     get wing(){return wingMode;},
     get libFont(){return libFont;},
+    get visible(){return visible.slice();},
+    get libNameCount(){return visible.length;},
+    setLocals(list){locals=list.slice();playlist=locals.slice();refreshVisible();},
+    get playing(){return !!source&&!paused;},
+    get paused(){return paused;},
+    get positionMs(){return Math.round(position()*1000);},
     clickCanvas(x,y){const r=screen.getBoundingClientRect();screen.dispatchEvent(new MouseEvent("click",{clientX:r.left+x*(r.width/640),clientY:r.top+y*(r.height/480),bubbles:true}));}
   };
   // Deterministic click test via #testclick=<x>,<y> in logical canvas coords.

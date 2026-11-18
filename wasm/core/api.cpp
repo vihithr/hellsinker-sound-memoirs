@@ -144,5 +144,15 @@ MEMOIRS_EXPORT const std::uint32_t* scene_text_points() {
 MEMOIRS_EXPORT std::uint32_t scene_text_count() {
     return (std::uint32_t)gfx_text_count();
 }
+// LIB list: `count` fixed-width (40-byte) NUL-terminated ASCII names.
+MEMOIRS_EXPORT void scene_set_local_names(const char* pool, std::int32_t count) {
+    sceneSetLocalNames(pool, (int)count);
+}
+MEMOIRS_EXPORT std::int32_t scene_local_name_width() {
+    return 40;
+}
+MEMOIRS_EXPORT std::int32_t scene_local_name_max() {
+    return 64;
+}
 
 } // extern "C"
