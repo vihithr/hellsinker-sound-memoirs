@@ -507,8 +507,6 @@ void PaintFieldLayout() {
         const int x1 = x0 + k * pitch, x2 = x1 + barW;
         const int up = int(lv * 258);
         if (up > 1) {
-            // Keep the band at full saturation so the red stays red; mixing
-            // it toward the waveform turned it into a dull brown-purple.
             FillRectCol(S(x1), S(baseY - up), S(x2), S(baseY), t.bar);
             FillRectCol(S(x1), S(baseY - up), S(x2), S(baseY - up + 3),
                         LerpCol(t.bar, RGB(255, 255, 255), 0.45f));
@@ -695,40 +693,20 @@ void PaintRingLayout() {
     ring(126, LerpCol(t.frame, t.outer, 0.20f), 1);
     ring(196, LerpCol(t.seam, t.outer, 0.30f), 1);
 
-    // 43 radial band blocks, starting at 12 o'clock. Full-saturation bars with
-    // a bright tip read as a real spectrum instead of a dim dotted ring.
+    // 43 radial band blocks, starting at 12 o'clock
     const int bands = memoirs::kSpectrumBands;
     for (int k = 0; k < bands; ++k) {
         const float lv = std::clamp(g_state->spectrum.barsLevel[k] / 96.0f, 0.f, 1.f);
-        const int blocks = 3 + int(lv * 14.f);
+        const int blocks = 2 + int(lv * 10.f);
         const float a = -kPi / 2.f + 2.f * kPi * k / bands;
         for (int b = 0; b < blocks; ++b) {
-            const int r = 112 + b * 6;
+            const int r = 132 + b * 6;
             const int x = cx + int(r * cosf(a)) - 1;
             const int y = cy + int(r * sinf(a)) - 1;
-            const COLORREF c = (b == blocks - 1)
-                ? LerpCol(t.bar, RGB(255, 255, 255), 0.45f)
-                : t.bar;
+            const COLORREF c = (b == blocks - 1) ? t.bar
+                              : LerpCol(t.wave, t.bar, 0.28f);
             FillRectCol(S(x), S(y), S(x + 3), S(y + 3), c);
         }
-    }
-
-    // Inner meter arcs: the two channel envelopes as half-circle gauges, so the
-    // centre is not an empty hole.
-    for (int side = 0; side < 2; ++side) {
-        const float env = std::clamp(side ? g_state->spectrum.envR : g_state->spectrum.envL,
-                                     0.f, 1.f);
-        const int segs = int(env * 34);
-        for (int i = 0; i < segs; ++i) {
-            const float a = side ? (kPi / 2.f + kPi * i / 34.f)
-                                 : (-kPi / 2.f - kPi * i / 34.f);
-            const int r = 86;
-            const int x = cx + int(r * cosf(a)) - 1;
-            const int y = cy + int(r * sinf(a)) - 1;
-            FillRectCol(S(x), S(y), S(x + 3), S(y + 3),
-                        side ? LerpCol(t.bar, t.wave, 0.35f) : t.wave);
-        }
-        DrawCells(side ? "R" : "L", cx + (side ? 96 : -104), cy - 5, 2);
     }
 
     // centre: phase diamond with up to three decayed traces
@@ -739,37 +717,17 @@ void PaintRingLayout() {
                              {(std::int16_t)S(cx - 46), (std::int16_t)S(cy)},
                              {(std::int16_t)S(cx), (std::int16_t)S(cy - 38)} };
         gfx_polyline(frame, 5, t.frame, 1);
-        // crosshair inside the diamond so the XY trace has a reference frame
-        FillRectCol(S(cx - 1), S(cy - 32), S(cx + 1), S(cy + 32),
-                    LerpCol(t.frame, t.outer, 0.55f));
-        FillRectCol(S(cx - 32), S(cy - 1), S(cx + 32), S(cy + 1),
-                    LerpCol(t.frame, t.outer, 0.55f));
         // XY plot of the two channels: the classic vector-display figure
         {
             GfxPoint pts2[120];
             for (int i = 0; i < 120; ++i) {
                 const float l = std::clamp(g_state->spectrum.waveL[i * 2] / 64.f, -1.f, 1.f);
                 const float r = std::clamp(g_state->spectrum.waveR[i * 2] / 64.f, -1.f, 1.f);
-                pts2[i] = { (std::int16_t)S(cx + int(l * 30)), (std::int16_t)S(cy - int(r * 30)) };
+                pts2[i] = { (std::int16_t)S(cx + int(l * 34)), (std::int16_t)S(cy - int(r * 34)) };
             }
             gfx_polyline(pts2, 120, t.bar, 1);
         }
         FillRectCol(S(cx - 1), S(cy - 1), S(cx + 2), S(cy + 2), t.bar);
-    }
-
-    // Track/time readout under the diamond fills the empty centre.
-    {
-        char line[48];
-        if (g_state->current >= 0 && g_state->current < kTrackCount)
-            snprintf(line, sizeof(line), "TR:%02d", g_state->current);
-        else if (g_state->current == kTrackCount)
-            snprintf(line, sizeof(line), "LOCAL");
-        else
-            snprintf(line, sizeof(line), "<SILENCE>");
-        DrawCells(line, cx - (int)strlen(line) * 4, cy + 62, 3);
-        char tb[32];
-        snprintf(tb, sizeof(tb), "TIME : %02dSEC", std::max(0, int(g_state->seconds)));
-        DrawCells(tb, cx - (int)strlen(tb) * 4, cy + 76, 3);
     }
 
     // 46 track ticks on the outside
@@ -785,40 +743,6 @@ void PaintRingLayout() {
 
     DrawCells("SOUND MEMOIRS", 152, 14, 0);
     { const char* nm = t.name; DrawCells(nm, 632 - (int)strlen(nm) * 8, 14, 2); }
-
-    // Corner readouts: the ring alone leaves four empty quarters, so hang the
-    // same information a player window would show there.
-    {
-        char line[48];
-        if (g_state->current >= 0 && g_state->current < kTrackCount)
-            snprintf(line, sizeof(line), "NOW PLAYING : TRACK %02d", g_state->current);
-        else if (g_state->current == kTrackCount)
-            snprintf(line, sizeof(line), "NOW PLAYING : LOCAL FILE");
-        else
-            snprintf(line, sizeof(line), "<SILENCE>");
-        DrawCells(line, 24, 34, 3);
-
-        char tb[32];
-        snprintf(tb, sizeof(tb), "TIME : %02dSEC", std::max(0, int(g_state->seconds)));
-        DrawCells(tb, 24, 48, 3);
-
-        const int lvL = int(std::clamp(g_state->spectrum.envL, 0.f, 1.f) * 99);
-        const int lvR = int(std::clamp(g_state->spectrum.envR, 0.f, 1.f) * 99);
-        char mb[32];
-        snprintf(mb, sizeof(mb), "L %02d  R %02d", lvL, lvR);
-        DrawCells(mb, 616 - (int)strlen(mb) * 8, 34, 3);
-
-        // level bars next to the meter text give the quarters some body
-        for (int side = 0; side < 2; ++side) {
-            const int lv = side ? lvR : lvL;
-            const int x0 = side ? 616 - 8 : 24;
-            for (int i = 0; i < lv / 4; ++i) {
-                const int y = 54 + i * 4;
-                FillRectCol(S(x0), S(y), S(x0 + 4), S(y + 2),
-                            i > 20 ? t.stripHot : t.strip);
-            }
-        }
-    }
 
     {
         char b[16];
@@ -847,23 +771,6 @@ void PaintCrossLayout() {
         FillRectCol(S(x), S(cy + 1), S(x + 1), S(cy + 6), t.seam);
     }
 
-    // 43-band spectrum rides the vertical axis, mirrored left/right: the
-    // crosshair itself becomes the analyser instead of empty geometry.
-    {
-        const int bands = memoirs::kSpectrumBands;
-        const int bandY0 = 36, bandSpan = 408;
-        const int bandH = bandSpan / bands;
-        for (int k = 0; k < bands; ++k) {
-            const float lv = std::clamp(g_state->spectrum.barsLevel[k] / 96.0f, 0.f, 1.f);
-            const int y = bandY0 + k * bandH;
-            const int len = int(lv * 122);
-            if (len < 2) continue;
-            FillRectCol(S(cx - 2 - len), S(y + 1), S(cx - 2), S(y + bandH - 1), t.bar);
-            FillRectCol(S(cx + 2), S(y + 1), S(cx + 2 + len), S(y + bandH - 1),
-                        LerpCol(t.bar, t.wave, 0.30f));
-        }
-    }
-
     // channel traces ride above (left) and below (right) the horizontal axis
     GfxPoint pts[120];
     for (int side = 0; side < 2; ++side) {
@@ -886,18 +793,13 @@ void PaintCrossLayout() {
                              {(std::int16_t)S(cx - 48), (std::int16_t)S(cy)},
                              {(std::int16_t)S(cx), (std::int16_t)S(cy - 40)} };
         gfx_polyline(frame, 5, t.frame, 1);
-        // reference crosshair inside the diamond
-        FillRectCol(S(cx - 1), S(cy - 34), S(cx + 1), S(cy + 34),
-                    LerpCol(t.frame, t.outer, 0.55f));
-        FillRectCol(S(cx - 34), S(cy - 1), S(cx + 34), S(cy + 1),
-                    LerpCol(t.frame, t.outer, 0.55f));
         // XY plot of the two channels inside the diamond
         {
             GfxPoint pts2[120];
             for (int i = 0; i < 120; ++i) {
                 const float l = std::clamp(g_state->spectrum.waveL[i * 2] / 64.f, -1.f, 1.f);
                 const float r = std::clamp(g_state->spectrum.waveR[i * 2] / 64.f, -1.f, 1.f);
-                pts2[i] = { (std::int16_t)S(cx + int(l * 32)), (std::int16_t)S(cy - int(r * 32)) };
+                pts2[i] = { (std::int16_t)S(cx + int(l * 40)), (std::int16_t)S(cy - int(r * 40)) };
             }
             gfx_polyline(pts2, 120, t.bar, 1);
         }
