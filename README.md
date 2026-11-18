@@ -53,6 +53,7 @@
 | ![field](docs/layout-field.png) | ![ring](docs/layout-ring.png) |
 
 布局只接管 `TR` 页；`LIB` 与 `SYS` 保持原版功能页面。选择写入 `hsbgm.ini` 的 `Layout`。
+外部设计参考、代码依据与验收数据见 **[docs/layout-references.md](docs/layout-references.md)**。
 
 ### 浏览器与跨平台开发
 
