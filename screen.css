@@ -1,0 +1,20 @@
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: #000;
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden;
+  user-select: none;
+}
+#screen {
+  display: block;
+  width: min(100vw, calc(100vh * 4 / 3));
+  height: auto;
+  max-height: 100vh;
+  aspect-ratio: 4 / 3;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  touch-action: none;
+  outline: none;
+  background: #d9e3e0;
+}
