@@ -19,6 +19,9 @@ $("aux-load")?.addEventListener("click",()=>{files.click();wakeAux();});
 $("aux-full")?.addEventListener("click",toggleFullscreen);
 $("aux-page")?.addEventListener("click",()=>{selectPage((page+1)%3);wakeAux();});
 $("aux-theme")?.addEventListener("click",()=>{cycleTheme();wakeAux();});
+$("aux-stage")?.addEventListener("click",()=>{cycleStage();wakeAux();});
+$("aux-wing")?.addEventListener("click",()=>{cycleWing();wakeAux();});
+$("aux-layout")?.addEventListener("click",()=>{cycleLayout();wakeAux();});
 $("aux-help")?.addEventListener("click",()=>{
   const h=$("help");h.classList.remove("show");void h.offsetWidth;h.classList.add("show");wakeAux();
 });
