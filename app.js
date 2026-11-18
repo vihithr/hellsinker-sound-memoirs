@@ -16,7 +16,21 @@ function toggleFullscreen(){
   wakeAux();
 }
 $("aux-load")?.addEventListener("click",()=>{files.click();wakeAux();});
-$("aux-pause")?.addEventListener("click",()=>{togglePause();wakeAux();});
+// One obvious transport button: start when idle, pause/resume while loaded.
+function updatePlayButton(){
+  const b=$("aux-play"); if(!b) return;
+  b.textContent=(current!==null&&!paused)?"⏸":"▶";
+}
+$("aux-play")?.addEventListener("click",()=>{
+  if(buffer&&current!==null){
+    togglePause();
+  }else if(!canPlay(selected)){
+    lastError=locals.length?"SELECT A LIB TRACK":"LOAD A PAK OR MUSIC FILE";
+  }else{
+    activate();
+  }
+  updatePlayButton();wakeAux();
+});
 $("aux-full")?.addEventListener("click",toggleFullscreen);
 $("aux-page")?.addEventListener("click",()=>{selectPage((page+1)%3);wakeAux();});
 $("aux-theme")?.addEventListener("click",()=>{cycleTheme();wakeAux();});
@@ -147,13 +161,19 @@ async function activate(){
       const file=localFiles.get(key);
       if(!file)throw Error("找不到本地文件");
       buffer=await decodeBrowser(file);
+      lastError="";
       current=target;loading=false;refreshTitle();start();
       return;
     }
     const b=context.createBuffer(2,pcm.length/2,44100);
     for(let c=0;c<2;c++){const out=b.getChannelData(c);for(let i=0;i<out.length;i++)out[i]=pcm[2*i+c]/32768;}
-    buffer=b;current=target;loading=false;refreshTitle();start();
-  }catch(e){lastError=String(e&&e.message||e);if(id===epoch){reset();}}
+    buffer=b;lastError="";current=target;loading=false;refreshTitle();start();
+  }catch(e){
+    // The on-canvas hint is ASCII-only (the atlas has no CJK glyphs).
+    console.warn(e);
+    lastError="PLAYBACK FAILED";
+    if(id===epoch){reset();}
+  }
 }
 function seek(seconds){if(!buffer)return;offset=Math.max(0,Math.min(buffer.duration,seconds));if(source)start();}
 // Decode a browser-supported container (MP3/AAC/M4A/FLAC/Opus/...) and
@@ -441,9 +461,16 @@ try{
       vizCore._scene_set_state(statePtr);
       vizCore._scene_advance(current===null?-1:current,seconds,playing?1:0,paused?1:0);
       vizCore._scene_render();
+      // On-canvas status line: the transport state must be visible without
+      // reading a help panel, otherwise "nothing happens" looks like a bug.
       const hasAny=available.some(Boolean)||locals.length>0;
-      const hint=loading?"DECODING ...":hasAny?"":"CTRL+O LOAD PAK OR DROP AUDIO FILE";
+      let hint="";
+      if(loading) hint="DECODING ...";
+      else if(lastError) hint=lastError;
+      else if(!hasAny) hint="PRESS + TO LOAD MUSIC";
+      else if(current===null) hint="PRESS PLAY TO START";
       draw({hintTheme:theme,hint});
+      updatePlayButton();
     }
     requestAnimationFrame(drawFrame);
   };

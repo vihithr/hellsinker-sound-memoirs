@@ -28,10 +28,12 @@ const texts = await ev("window.__hsTest.drawnText()");
 R.drawnTextRuns = texts ? texts.length : 0;
 R.textsWithCJK = (texts || []).filter(s => /[\u4e00-\u9fff]/.test(s));
 R.hasQuestionMarks = (texts || []).filter(s => s.includes("?"));
-// play it
-await ev("window.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter'}))");
+// play it through the visible transport button (not a synthetic key)
+R.playButton = await ev("!!document.getElementById('aux-play')");
+await ev("document.getElementById('aux-play').click()");
 await new Promise(r=>setTimeout(r,2200));
 R.playing = await ev("window.__hsTest.playing");
+R.playButtonLabel = await ev("document.getElementById('aux-play').textContent");
 R.bufferDuration = await ev("window.__hsTest.bufferDuration");
 R.positionMs = await ev("window.__hsTest.positionMs");
 R.lastError = await ev("window.__hsTest.lastError");
