@@ -1,0 +1,17 @@
+import { writeFileSync } from "node:fs";
+const tabs = await (await fetch("http://127.0.0.1:9223/json")).json();
+const tab = tabs.find(t => t.type === "page" && t.url.includes("8111"));
+const ws = new WebSocket(tab.webSocketDebuggerUrl);
+await new Promise(r => ws.onopen = r);
+let id = 0; const pending = new Map();
+ws.onmessage = e => { const m = JSON.parse(e.data); if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id); } };
+const call = (method, params = {}) => new Promise(resolve => { const n = ++id; pending.set(n, resolve); ws.send(JSON.stringify({ id: n, method, params })); });
+await call("Runtime.enable");
+await call("Page.enable");
+const ev = async expr => (await call("Runtime.evaluate", { expression: expr, returnByValue: true })).result?.result?.value;
+await ev("document.getElementById('aux-help').click()");
+await new Promise(r=>setTimeout(r,400));
+const shot = await call("Page.captureScreenshot", { format: "png" });
+writeFileSync(process.argv[2], Buffer.from(shot.result.data, "base64"));
+console.log("saved");
+ws.close();

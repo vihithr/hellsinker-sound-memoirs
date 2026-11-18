@@ -18,6 +18,10 @@ function toggleFullscreen(){
 $("aux-load")?.addEventListener("click",()=>{files.click();wakeAux();});
 $("aux-full")?.addEventListener("click",toggleFullscreen);
 $("aux-page")?.addEventListener("click",()=>{selectPage((page+1)%3);wakeAux();});
+$("aux-theme")?.addEventListener("click",()=>{cycleTheme();wakeAux();});
+$("aux-help")?.addEventListener("click",()=>{
+  const h=$("help");h.classList.remove("show");void h.offsetWidth;h.classList.add("show");wakeAux();
+});
 
 // ---- state (mirrors the desktop PlayerApp subset the replica needs) --------
 let names=[],locals=[],available=[],selected=0,current=null;
@@ -203,6 +207,10 @@ window.addEventListener("keydown",e=>{
     return;
   }
   if(page===2){ // SYS navigation
+    if(k==="c"||k==="C"||k==="t"||k==="T"){cycleTheme();return;}
+    if(k==="F9"){e.preventDefault();cycleLayout();return;}
+    if(k==="F7"){e.preventDefault();cycleStage();return;}
+    if(k==="F8"){e.preventDefault();cycleWing();return;}
     if(k==="ArrowUp"){e.preventDefault();settingRow=(settingRow+4)%5;markRailActivity();return;}
     if(k==="ArrowDown"){e.preventDefault();settingRow=(settingRow+1)%5;markRailActivity();return;}
     if(k==="ArrowLeft"){e.preventDefault();adjustSetting(-1);return;}
@@ -333,6 +341,10 @@ try{
   window.__hsTest={
     get page(){return page;},
     setPage(p){selectPage(p);},
+    get lang(){return lang;},
+    get settingRow(){return settingRow;},
+    get layout(){return layoutMode;},
+    get theme(){return theme;},
     clickCanvas(x,y){const r=screen.getBoundingClientRect();screen.dispatchEvent(new MouseEvent("click",{clientX:r.left+x*(r.width/640),clientY:r.top+y*(r.height/480),bubbles:true}));}
   };
   // Deterministic click test via #testclick=<x>,<y> in logical canvas coords.

@@ -28,3 +28,14 @@ body {
   font-size: 20px; line-height: 1; cursor: pointer;
 }
 #aux button:hover { background: rgba(40,60,80,.95); }
+#help {
+  position: absolute; left: 4%; top: 6%; width: 92%;
+  display: none; flex-direction: column; gap: 4px;
+  padding: 12px 14px; border: 1px solid #7a9; border-radius: 4px;
+  background: rgba(12,20,30,.92); color: #dfe;
+  font: 12px/1.5 "Segoe UI", Tahoma, sans-serif;
+  pointer-events: none; z-index: 5;
+}
+#help.show { display: flex; animation: helpfade 5s ease forwards; }
+#help b { color: #8cf; letter-spacing: .08em; margin-bottom: 4px; }
+@keyframes helpfade { 0%,70% { opacity: 1; } 100% { opacity: 0; } }
