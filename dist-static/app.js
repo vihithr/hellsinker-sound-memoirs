@@ -109,6 +109,31 @@ function libPlayCursor(){
   selected=names.length+real;
   activate();
 }
+// A local track finished: advance according to the LIB order mode, mirroring
+// the desktop OnTimer check (sequential / repeat-one / repeat-all / shuffle).
+function onLocalTrackEnded(){
+  const count=visible.length;
+  if(!count)return;
+  if(localOrder===1){          // ONE: replay the same track
+    libPlayCursor();
+    return;
+  }
+  let row=libCursor;
+  if(localOrder===3&&count>1){ // SHUFFLE: any other row
+    let n=row;
+    while(n===row) n=Math.floor(Math.random()*count);
+    row=n;
+  }else{
+    row+=1;
+    if(row>=count){
+      if(localOrder===2) row=0;   // LOOP: wrap to the first row
+      else return;                // ORDER: stop at the end of the list
+    }
+  }
+  libCursor=Math.max(0,Math.min(count-1,row));
+  clampLibScroll();
+  libPlayCursor();
+}
 let lang=0; // 0=EN, 1=ZH, 2=JA
 let playlist=[],localIndex=-1,localOrder=0; // 0 sequential, 1 repeat-one, 2 repeat-all, 3 shuffle
 const localFiles=new Map();  // norm(name) -> File, for browser-native decoding
@@ -151,7 +176,13 @@ function start(){
   const s=context.createBufferSource();s.buffer=buffer;s.loop=current!==null&&current<names.length;
   if(!gain){gain=context.createGain();gain.gain.value=volume/100;gain.connect(context.destination);}
   s.connect(gain);source=s;started=context.currentTime;paused=false;
-  s.onended=()=>{if(source===s&&buffer&&s.loop!==true){source=null;offset=0;}};
+  s.onended=()=>{
+    if(source!==s)return;
+    source=null;offset=0;
+    // Local tracks advance according to the LIB order mode; TR tracks loop
+    // inside the source itself and never reach here.
+    if(current!==null&&current>=names.length)onLocalTrackEnded();
+  };
   s.start(0,offset);
 }
 async function activate(){
@@ -554,6 +585,10 @@ try{
     get currentRow(){return current!==null&&current>=names.length?visible.indexOf(current-names.length):-1;},
     get selected(){return selected;},
     get current(){return current;},
+    get localOrder(){return localOrder;},
+    set localOrder(v){localOrder=v;},
+    libPlay(row){libCursor=Math.max(0,Math.min(visible.length-1,row));clampLibScroll();libPlayCursor();},
+    stopAll(){stop();},
     get bufferDuration(){return buffer?buffer.duration:0;},
     get localFilesSize(){return localFiles.size;},
     get lastError(){return lastError;},
