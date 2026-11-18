@@ -149,7 +149,7 @@ MEMOIRS_EXPORT void scene_set_local_names(const char* pool, std::int32_t count) 
     sceneSetLocalNames(pool, (int)count);
 }
 MEMOIRS_EXPORT std::int32_t scene_local_name_width() {
-    return 40;
+    return sceneLocalNameWidth();
 }
 MEMOIRS_EXPORT std::int32_t scene_local_name_max() {
     return 64;

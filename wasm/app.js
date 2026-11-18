@@ -49,16 +49,23 @@ function refreshVisible(){
 // Upload the visible names as fixed-width ASCII records for the C++ painter.
 function pushLocalNames(){
   if(!vizCore||!vizCore._scene_set_local_names) return;
-  const W=40;
+  const W=vizCore._scene_local_name_width?vizCore._scene_local_name_width():96;
   const max=vizCore._scene_local_name_max?vizCore._scene_local_name_max():64;
   const count=Math.min(visible.length,max);
   const bytes=new Uint8Array(W*(count||1));
+  const enc=new TextEncoder();  // UTF-8 so CJK file names survive
   for(let i=0;i<count;i++){
     const name=locals[visible[i]]||"";
-    for(let k=0;k<W-1&&k<name.length;k++){
-      const c=name.charCodeAt(k);
-      bytes[i*W+k]=(c>=32&&c<127)?c:63; // ASCII-safe fallback
+    const utf8=enc.encode(name);
+    // Copy whole code points only; the C++ side re-checks the boundary too.
+    let n=0;
+    while(n<utf8.length&&n<W-1){
+      const b=utf8[n];
+      const len=(b<0x80)?1:(b>=0xF0)?4:(b>=0xE0)?3:(b>=0xC0)?2:1;
+      if(n+len>W-1) break;
+      n+=len;
     }
+    bytes.set(utf8.subarray(0,n),i*W);
   }
   const ptr=vizCore._alloc(bytes.length);
   if(!ptr) return;
@@ -79,7 +86,7 @@ let lang=0; // 0=EN, 1=ZH, 2=JA
 let playlist=[],localIndex=-1,localOrder=0; // 0 sequential, 1 repeat-one, 2 repeat-all, 3 shuffle
 const localFiles=new Map();  // norm(name) -> File, for browser-native decoding
 const fileKey=s=>s.toLowerCase().replaceAll("/","\\");
-let scrubbing=false,scrubFraction=0,next=0,fatal=null,ready=false;
+let scrubbing=false,scrubFraction=0,next=0,fatal=null,ready=false,lastError="";
 const THEMES=["ORIGINAL","DARK","NEON","PAPER","BLUEPRINT"];
 const LAYOUTS=["ORIGINAL","FIELD","STACK","RING","CROSS"];
 const ORDERS=["ORDER","ONE","LOOP","SHUFFLE"];
@@ -146,7 +153,7 @@ async function activate(){
     const b=context.createBuffer(2,pcm.length/2,44100);
     for(let c=0;c<2;c++){const out=b.getChannelData(c);for(let i=0;i<out.length;i++)out[i]=pcm[2*i+c]/32768;}
     buffer=b;current=target;loading=false;refreshTitle();start();
-  }catch(e){if(id===epoch){reset();}}
+  }catch(e){lastError=String(e&&e.message||e);if(id===epoch){reset();}}
 }
 function seek(seconds){if(!buffer)return;offset=Math.max(0,Math.min(buffer.duration,seconds));if(source)start();}
 // Decode a browser-supported container (MP3/AAC/M4A/FLAC/Opus/...) and
@@ -154,10 +161,20 @@ function seek(seconds){if(!buffer)return;offset=Math.max(0,Math.min(buffer.durat
 // visual cursor assume.
 async function decodeBrowser(file){
   const bytes=await file.arrayBuffer();
-  const decoded=await context.decodeAudioData(bytes);
+  let decoded;
+  try{
+    // Chrome/Safari need a copy here: decodeAudioData detaches its input.
+    decoded=await context.decodeAudioData(bytes.slice(0));
+  }catch(e){
+    throw Error("浏览器无法解码此格式（"+file.name+"）");
+  }
+  if(!decoded||!decoded.length) throw Error("解码结果为空："+file.name);
+  const OfflineCtx=window.OfflineAudioContext||window.webkitOfflineAudioContext;
   if(decoded.sampleRate===44100&&decoded.numberOfChannels>=2) return decoded;
+  if(!OfflineCtx) return decoded;  // fall back: the cursor is sample-rate aware
   const frames=Math.ceil(decoded.duration*44100);
-  const off=new OfflineAudioContext(2,frames,44100);
+  if(frames<1) return decoded;
+  const off=new OfflineCtx(2,frames,44100);
   const src=off.createBufferSource();
   src.buffer=decoded;src.connect(off.destination);src.start();
   return await off.startRendering();
@@ -364,7 +381,12 @@ try{
       const seconds=position();
       const playing=!!source&&!paused;
       if(playing&&buffer){
-        const n=buffer.length,first=Math.floor(Math.abs(Math.floor(seconds*44100)*4-22050)/4)%n;
+        // Same 125 ms visual-cursor compensation as the desktop, but expressed
+        // in this buffer's own sample rate: a 48 kHz or mono MP3 would otherwise
+        // desync the analyser from the audio.
+        const rate=buffer.sampleRate;
+        const n=buffer.length;
+        const first=Math.floor(Math.abs(Math.floor(seconds*rate)*4-Math.round(rate*0.5))/4)%n;
         const l=buffer.getChannelData(0),r=buffer.getChannelData(1),dst=vizCore.HEAP16;
         for(let i=0,j=first;i<1024;i++,j=(j+1)%n){
           dst[(vizPtr>>>1)+2*i]=Math.round(l[j]*32768);
@@ -448,6 +470,25 @@ try{
     get playing(){return !!source&&!paused;},
     get paused(){return paused;},
     get positionMs(){return Math.round(position()*1000);},
+    get bufferDuration(){return buffer?buffer.duration:0;},
+    get localFilesSize(){return localFiles.size;},
+    get lastError(){return lastError;},
+    // Code points of every text run the shared painter emitted this frame
+    // (used to verify CJK names actually reach the renderer).
+    drawnText(){
+      const n=vizCore._scene_text_count();
+      const tp=vizCore._scene_texts()>>>0, pp=vizCore._scene_text_points()>>>0;
+      const dv=new DataView(vizCore.HEAPU8.buffer,vizCore.HEAPU8.byteOffset+tp,n*20);
+      const pdv=new DataView(vizCore.HEAPU8.buffer,vizCore.HEAPU8.byteOffset+pp);
+      const out=[];
+      for(let i=0;i<n;i++){
+        const off=dv.getUint16(i*20,true),cnt=dv.getUint16(i*20+2,true);
+        let s="";
+        for(let k=0;k<cnt;k++) s+=String.fromCodePoint(pdv.getUint32((off+k)*4,true));
+        out.push(s);
+      }
+      return out;
+    },
     clickCanvas(x,y){const r=screen.getBoundingClientRect();screen.dispatchEvent(new MouseEvent("click",{clientX:r.left+x*(r.width/640),clientY:r.top+y*(r.height/480),bubbles:true}));}
   };
   // Deterministic click test via #testclick=<x>,<y> in logical canvas coords.

@@ -64,7 +64,7 @@ static inline const Theme& Th() { return kThemes[g_state->theme]; }
 // so the archive page can list real file names. Fixed-width ASCII records:
 // the browser writes count*40 bytes of NUL-terminated names at once.
 constexpr int kLibNameMax = 64;
-constexpr int kLibNameWidth = 40;
+constexpr int kLibNameWidth = 96;   // UTF-8 bytes: ~32 CJK chars per name
 char g_libNames[kLibNameMax][kLibNameWidth] = {};
 int g_libNameCount = 0;
 
@@ -112,9 +112,9 @@ void panelBox(int x, int y, int r, int b, COLORREF c) {
 static void textUtf8(const char* text, int x, int y, int right, int bottom,
                      COLORREF color, std::uint8_t align = GFX_ALIGN_LEFT) {
     if (!text) return;
-    std::uint32_t cps[64];
+    std::uint32_t cps[128];
     int n = 0;
-    for (const unsigned char* p = (const unsigned char*)text; *p && n < 64;) {
+    for (const unsigned char* p = (const unsigned char*)text; *p && n < 128;) {
         std::uint32_t cp = *p++;
         if (cp >= 0xC0 && cp < 0xE0 && *p) { cp = ((cp & 0x1F) << 6) | (*p++ & 0x3F); }
         else if (cp >= 0xE0 && cp < 0xF0 && *p && p[1]) {
@@ -178,7 +178,13 @@ void DrawCells(const char* text, int x, int y, int palette = 0) {
 static void textLib(const char* text, int x, int y, int right, int bottom,
                     COLORREF color, std::uint8_t align = GFX_ALIGN_LEFT) {
     if (!text) return;
-    if (g_state->libFont == 0) {
+    // The 8x11 atlas only carries ASCII glyphs; a CJK file name has to use the
+    // pixel-font path even when the ORIGINAL (atlas) lib font is selected.
+    bool ascii = true;
+    for (const unsigned char* p = (const unsigned char*)text; *p; ++p) {
+        if (*p >= 0x80) { ascii = false; break; }
+    }
+    if (g_state->libFont == 0 && ascii) {
         (void)right; (void)bottom; (void)align;
         DrawCells(text, x + 4, y + 5, 0);
     } else {
@@ -1115,8 +1121,12 @@ void sceneRender(const SceneState& s, float scale, const stage::Memory& memory,
         AlphaFill(0, 0, S(kLogicalW), S(kLogicalH), RGB(8, 4, 16), 255 - ClampI(8 * t, 0, 255));
 }
 
-// Shell entry point: replace the LIB list with `count` fixed-width ASCII
-// records read from `pool` (count * kLibNameWidth bytes).
+// Width of one LIB name record, so the shell never hardcodes the stride.
+int sceneLocalNameWidth() { return kLibNameWidth; }
+
+// Shell entry point: replace the LIB list with `count` fixed-width UTF-8
+// records read from `pool` (count * kLibNameWidth bytes). Names are copied
+// on code-point boundaries so a truncated CJK name never ends mid-sequence.
 void sceneSetLocalNames(const char* pool, int count) {
     if (!pool || count <= 0) {
         g_libNameCount = 0;
@@ -1128,7 +1138,17 @@ void sceneSetLocalNames(const char* pool, int count) {
     for (int i = 0; i < kLibNameMax; ++i) {
         if (i < count) {
             const char* src = pool + (std::size_t)i * kLibNameWidth;
-            std::snprintf(g_libNames[i], kLibNameWidth, "%s", src);
+            int n = 0;
+            while (n < kLibNameWidth - 1) {
+                const unsigned char c = (unsigned char)src[n];
+                if (c == 0) break;
+                const int len = (c < 0x80) ? 1 : (c >= 0xF0) ? 4
+                              : (c >= 0xE0) ? 3 : (c >= 0xC0) ? 2 : 1;
+                if (n + len > kLibNameWidth - 1) break;   // keep whole glyphs
+                n += len;
+            }
+            std::memcpy(g_libNames[i], src, (std::size_t)n);
+            g_libNames[i][n] = 0;
         } else {
             g_libNames[i][0] = 0;
         }
