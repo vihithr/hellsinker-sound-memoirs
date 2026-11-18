@@ -18,12 +18,13 @@ export async function createScene(canvas, core) {
     return img;
   }));
 
-  // Original full artwork addressed by src >= kGfxImageBase (100):
-  //   100 = title.png (418x56), 101 = axis.png
+  // Themed title artwork addressed by src >= kGfxImageBase (100):
+  //   100..104 = title_0..4.png (per-theme recolor by make_themed_title.py)
   const loadImage = async name => {
     const img = new Image(); img.src = `assets/${name}.png`; await img.decode(); return img;
   };
-  const images = { 100: await loadImage("title"), 101: await loadImage("axis") };
+  const images = {};
+  for (let i = 0; i < 5; i++) images[100 + i] = await loadImage(`title_${i}`);
 
   // COLORREF is 0x00BBGGRR; CSS wants rgb(R,G,B).
   const css = c => `rgb(${c & 255},${(c >> 8) & 255},${(c >> 16) & 255})`;

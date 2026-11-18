@@ -56,22 +56,27 @@ struct AtlasSet {
 
 AtlasSet g_atlas;
 
-// Original full artwork (title=102, axis=103), blitted 1:1 for the title.
+// Themed title artwork (resources 115..119 = title_<theme>.bmp), blitted
+// 1:1 with per-theme recoloring produced by tools/make_themed_title.py.
+constexpr int kTitleResBase = 115;
+constexpr int kTitleImages = 5;
 struct ImageSet {
-    HDC dc[2];
-    HBITMAP bmp[2];
+    HDC dc[kTitleImages];
+    HBITMAP bmp[kTitleImages];
     bool built;
-    ImageSet() : built(false) { dc[0] = dc[1] = nullptr; bmp[0] = bmp[1] = nullptr; }
+    ImageSet() : built(false) {
+        for (int i = 0; i < kTitleImages; ++i) { dc[i] = nullptr; bmp[i] = nullptr; }
+    }
     ~ImageSet() {
-        for (int i = 0; i < 2; ++i) {
+        for (int i = 0; i < kTitleImages; ++i) {
             if (dc[i]) DeleteDC(dc[i]);
             if (bmp[i]) DeleteObject(bmp[i]);
         }
     }
     void ensure() {
         if (built) return;
-        for (int i = 0; i < 2; ++i) {
-            bmp[i] = LoadBitmapA(GetModuleHandleA(nullptr), MAKEINTRESOURCEA(102 + i));
+        for (int i = 0; i < kTitleImages; ++i) {
+            bmp[i] = LoadBitmapA(GetModuleHandleA(nullptr), MAKEINTRESOURCEA(kTitleResBase + i));
             if (!bmp[i]) continue;
             dc[i] = CreateCompatibleDC(nullptr);
             if (!dc[i]) { DeleteObject(bmp[i]); bmp[i] = nullptr; continue; }
@@ -90,7 +95,7 @@ HDC atlasDC(int theme) {
 
 HDC imageDC(int which) {
     g_images.ensure();
-    if (which < 0 || which > 1) return nullptr;
+    if (which < 0 || which >= kTitleImages) return nullptr;
     return g_images.dc[which];
 }
 

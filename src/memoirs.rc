@@ -6,6 +6,11 @@
 112 BITMAP "assets/themed/cells_2.bmp"
 113 BITMAP "assets/themed/cells_3.bmp"
 114 BITMAP "assets/themed/cells_4.bmp"
+115 BITMAP "assets/themed/title_0.bmp"
+116 BITMAP "assets/themed/title_1.bmp"
+117 BITMAP "assets/themed/title_2.bmp"
+118 BITMAP "assets/themed/title_3.bmp"
+119 BITMAP "assets/themed/title_4.bmp"
 
 // panel_text.cpp: private SIL OFL font plus redistributable legal notices.
 201 RCDATA "assets/fonts/fusion-pixel-12px-monospaced-zh_hans.ttf"

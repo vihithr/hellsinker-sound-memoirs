@@ -97,9 +97,10 @@ void gfx_ellipse(int x0, int y0, int x1, int y1, COLORREF c);
 // Atlas blit: copy cell (sx,sy,sw,sh) from atlas src to (dx,dy) sized
 // (dw,dh). src is the themed cell-atlas index (0..4), matching the resource
 // ids loaded by the desktop backend and wasm/assets/cells_<src>.png.
-// src >= kGfxImageBase addresses full original artwork instead:
-//   kGfxImageBase + 0 = title (resource 102 / wasm/assets/title.png)
-//   kGfxImageBase + 1 = axis  (resource 103 / wasm/assets/axis.png)
+// src >= kGfxImageBase addresses full artwork instead:
+//   kGfxImageBase + 0..4 = themed title (resources 115..119 on the desktop,
+//   wasm/assets/title_<i>.png in the browser; recolored per theme by
+//   tools/make_themed_title.py so the title follows the palette).
 void gfx_blit(int src, int sx, int sy, int sw, int sh, int dx, int dy,
               int dw, int dh);
 constexpr int kGfxImageBase = 100;

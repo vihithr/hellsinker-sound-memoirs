@@ -302,7 +302,7 @@ void PaintTitle() {
     // original wide, heavy glyphs rely on; the bitmap restores that 1:1 look.
     // Nearest-neighbour scaling is handled by each gfx backend (COLORONCOLOR
     // on GDI, imageSmoothingEnabled=false on Canvas).
-    gfx_blit(kGfxImageBase + 0, 0, 0, 418, 56, 152, 18, 209, 28);
+    gfx_blit(kGfxImageBase + g_state->theme, 0, 0, 418, 56, 152, 18, 209, 28);
 }
 
 // Selection cursor: 56x16 cell.  Amber margins around the glyph band (the
@@ -885,11 +885,30 @@ static void PaintSystemPanel() {
     panelBox(L, T + 1, L + 1, B, frame);
     panelBox(R - 1, T + 1, R, B, frame);
     panelBox(L, B - 1, R, B, frame);
-    textUtf8("SETTINGS", 154, 249, 285, 271, helpInk);
+    // Three-language UI strings (ported from the desktop config_panel.cpp
+    // Localize() tables so the browser SYS page honors the language setting).
+    const int L3 = g_state->language % 3;
+    static const char* kSysTitle[3] = { "SETTINGS", "系统设置", "設定" };
+    static const char* kSysLabels[3][5] = {
+        { "OUTPUT LEVEL", "PALETTE", "LANGUAGE", "LIB FONT", "COMPOSITION" },
+        { "输出音量", "画面配色", "界面语言", "曲库字体", "画面布局" },
+        { "出力音量", "配色", "言語", "ライブラリ書体", "画面構成" },
+    };
+    static const char* kSysHelp[3][5] = {
+        { "Master output level", "Interface and signal palette",
+          "Interface and help language", "Library track title typeface",
+          "Screen composition" },
+        { "主音量（最终输出）", "界面与信号配色",
+          "界面与帮助语言", "曲库曲目名的显示字体", "画面布局的选择" },
+        { "主音量（最終出力）", "画面と信号の配色",
+          "表示とヘルプの言語", "音楽庫の曲名書体", "画面構成の選択" },
+    };
+    static const char* kLangNames[3] = { "ENGLISH", "简体中文", "日本語" };
+    static const char* kDefaultLine[3] = { "Default: 80%", "默认值: 80%", "初期値: 80%" };
+    textUtf8(kSysTitle[L3], 154, 249, 285, 271, helpInk);
     panelBox(154, 268, 355, 269, stripEdge);
-    static const char* labels[5] = { "OUTPUT LEVEL", "PALETTE", "LANGUAGE", "LIB FONT", "COMPOSITION" };
-    static const char* helpText[5] = { "Master output level", "Interface and signal palette",
-        "Interface and help language", "Library track title typeface", "Screen composition" };
+    const char* const* labels = kSysLabels[L3];
+    const char* const* helpText = kSysHelp[L3];
     const int active = g_state->settingRow, y0 = 283, pitch = 31;
     char valueBuf[32];
     for (int row = 0; row < 5; ++row) {
@@ -915,7 +934,7 @@ static void PaintSystemPanel() {
         panelBox(469, mid - 1, 478, mid + 1, t.ink); panelBox(473, mid - 4, 475, mid + 5, t.ink);
         if (row == 0) std::snprintf(valueBuf, sizeof(valueBuf), "%d%%", g_state->volume);
         else if (row == 1) std::snprintf(valueBuf, sizeof(valueBuf), "%s", Th().name);
-        else if (row == 2) { const char* langs[3] = { "ENGLISH", "ZH", "JA" }; std::snprintf(valueBuf, sizeof(valueBuf), "%s", langs[g_state->language % 3]); }
+        else if (row == 2) std::snprintf(valueBuf, sizeof(valueBuf), "%s", kLangNames[L3]);
         else if (row == 3) std::snprintf(valueBuf, sizeof(valueBuf), "%s", g_state->libFont ? "PIXEL" : "ORIGINAL");
         else { textCodePoints(g_state->layoutName, g_state->layoutNameLen, 303, y + 6, 454, y + 27, t.digit, GFX_ALIGN_RIGHT); continue; }
         textUtf8(valueBuf, 303, y + 6, 454, y + 27, t.digit, GFX_ALIGN_RIGHT);
@@ -931,12 +950,20 @@ static void PaintSystemPanel() {
     panelBox(154, 442, 486, 443, frame);
     panelBox(157, 447, 160, 471, frame);
     textUtf8(helpText[active % 5], 167, 444, 481, 460, helpInk);
-    textUtf8("Default: 80%", 167, 458, 481, 474, t.digit);
+    textUtf8(kDefaultLine[L3], 167, 458, 481, 474, t.digit);
 }
 
 static void PaintArchivePage() {
     const Theme& t = Th();
     const bool local = g_state->current >= kTrackCount;
+    // Three-language LIB strings (from the desktop archivePaint tr() calls).
+    const int L3 = g_state->language % 3;
+    static const char* kLibTitle[3] = { "LOCAL ARCHIVE", "本地曲库", "音楽庫" };
+    static const char* kLibSearch[3] = { "Search tracks", "搜索曲名、艺人或专辑", "曲・アーティスト検索" };
+    static const char* kLibAdd[3] = { "Add files", "添加音乐", "曲を追加" };
+    static const char* kLibPause[3] = { "PAUSE", "暂停", "一時停止" };
+    static const char* kLibPlay[3] = { "PLAY", "播放", "再生" };
+    static const char* kLibStop[3] = { "Stop", "停止", "停止" };
     // Status line: HOLD / ON AIR, now-playing title, time / duration.
     textUtf8(g_state->libPaused ? "HOLD" : "ON AIR", 154, 249, 201, 264, t.digit);
     char now[48];
@@ -956,13 +983,13 @@ static void PaintArchivePage() {
         const int end = 154 + int((486 - 154) * (std::min(1.0, std::max(0.0, (double)pos / dur))) + .5);
         if (end > 154) panelBox(154, 266, end, 268, t.bar);
     }
-    textUtf8("LOCAL ARCHIVE", 154, 271, 330, 289, t.ink);
+    textUtf8(kLibTitle[L3], 154, 271, 330, 289, t.ink);
     // search + add row
     panelBox(154, 293, 405, 309, t.strip);
     if (g_state->searchTextLen > 0)
         textCodePoints(g_state->searchText, g_state->searchTextLen, 159, 293, 400, 309, t.ink);
-    else textUtf8("Search tracks", 159, 293, 400, 309, t.ink);
-    textUtf8("Add files", 406, 293, 486, 309, t.digit, GFX_ALIGN_CENTER);
+    else textUtf8(kLibSearch[L3], 159, 293, 400, 309, t.ink);
+    textUtf8(kLibAdd[L3], 406, 293, 486, 309, t.digit, GFX_ALIGN_CENTER);
     // ruled slots
     for (int row = 0; row < 7; ++row) {
         const int y = 330 + row * 18;
@@ -996,8 +1023,8 @@ static void PaintArchivePage() {
     panelBox(154, 440, 486, 441, t.frame);
     static const char* orders[4] = { "ORDER", "ONE", "LOOP", "SHUFFLE" };
     textUtf8(orders[g_state->localOrder % 4], 154, 443, 212, 460, t.digit);
-    textUtf8(g_state->libPlaying && !g_state->libPaused ? "PAUSE" : "PLAY", 213, 443, 277, 460, t.digit);
-    textUtf8("Stop", 278, 443, 331, 460, t.digit);
+    textUtf8(g_state->libPlaying && !g_state->libPaused ? kLibPause[L3] : kLibPlay[L3], 213, 443, 277, 460, t.digit);
+    textUtf8(kLibStop[L3], 278, 443, 331, 460, t.digit);
     textUtf8("<", 341, 443, 375, 460, t.digit, GFX_ALIGN_CENTER);
     textUtf8("1 / 1", 375, 443, 453, 460, t.ink, GFX_ALIGN_CENTER);
     textUtf8(">", 453, 443, 486, 460, t.digit, GFX_ALIGN_CENTER);

@@ -39,10 +39,11 @@ if off + 4 <= len(data):
 img = Image.new("RGB", (640, 480), (0, 0, 0))
 pix = img.load()
 cells = Image.open(root / "wasm/assets/cells_0.png").convert("RGB")
-# Full artwork addressed by src >= kGfxImageBase (100): title=100, axis=101.
+# Full artwork addressed by src >= kGfxImageBase (100): 100..104 = themed
+# title_0..4.png (recolored per theme by make_themed_title.py).
 images = {
-    100: Image.open(root / "wasm/assets/title.png").convert("RGB"),
-    101: Image.open(root / "wasm/assets/axis.png").convert("RGB"),
+    100 + i: Image.open(root / f"wasm/assets/title_{i}.png").convert("RGB")
+    for i in range(5)
 }
 
 
