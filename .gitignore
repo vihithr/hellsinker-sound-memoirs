@@ -15,6 +15,9 @@ hsbgm.catalog*
 # axis_<i>.bmp is only used by the wasm asset pipeline and is not embedded)
 assets/themed/axis_*.bmp
 
+# deployable site archive: regenerate with Compress-Archive from dist-static/
+dist-static.zip
+
 # python
 __pycache__/
 *.pyc

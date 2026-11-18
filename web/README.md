@@ -13,6 +13,11 @@
 - `INSTRUMENT`：基于原版 640×480 `SOUND MEMOIRS` 画面的仪器布局。
 - `PAPER`：纸色档案页、装订孔与横向记录线组成的收藏档案风格。
 
+> **字体位置**：本页的 Fusion Pixel 像素字体与桌面端共用仓库里唯一一份
+> `../assets/fonts/fusion-pixel-12px-monospaced-zh_hans.ttf`，不再在 `web/` 下保留
+> 7 MB 副本。因此本目录需要与 `assets/` 一起使用，不能单独拷走；用 `file://`
+> 直接打开 `index.html` 仍然可用。
+
 ## 运行
 
 直接打开 `index.html`，或在本目录启动任意静态文件服务器：

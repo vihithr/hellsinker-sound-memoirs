@@ -6,7 +6,9 @@
 
 @font-face {
   font-family: "Fusion Pixel";
-  src: url("./assets/fonts/fusion-pixel-12px-monospaced-zh_hans.ttf") format("truetype");
+  /* Shared with the desktop/embedded copy instead of keeping a second 7 MB
+     duplicate under web/. Loaded over the same file:// or http:// origin. */
+  src: url("../assets/fonts/fusion-pixel-12px-monospaced-zh_hans.ttf") format("truetype");
   font-display: swap;
 }
 
