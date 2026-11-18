@@ -452,18 +452,22 @@ void PaintWings(int style) {
             for (int row = 0; row < 44; ++row) {
                 float peak = 0;
                 for (int j = 0; j < 5; ++j) peak = std::max(peak, std::abs(wave[row * 5 + j]));
-                const float contour = .34f + .66f * sqrt(std::min(1.f, peak / 64.f));
+                // Linear (not sqrt) mapping keeps the bar length responsive:
+                // sqrt lifted quiet rows to near-full width and killed the bounce.
+                const float contour = std::clamp(.16f + .84f * (peak / 110.f), 0.f, 1.f);
                 int width = 2 + int((span - 2) * contour), y = 27 + row * 10;
                 if (style == 2) {
                     const float heat = std::clamp(contour * .62f + g_state->wing[side] * .38f, 0.f, 1.f);
+                    // Alternate rows were mixed *from* the cool wave colour, so the
+                    // "red" row could never exceed 42% red and always looked dusty.
                     const COLORREF ink = row & 1
-                        ? LerpCol(t.wave, t.underline, .62f + .16f * heat)
-                        : LerpCol(t.wave, t.bar, .08f + .34f * heat);
+                        ? LerpCol(t.underline, t.wave, .16f - .12f * heat)
+                        : LerpCol(t.bar, RGB(255, 255, 255), .10f + .22f * heat);
                     FillRectCol(S(base - width), S(y), S(base + width), S(y + 2), ink);
                     const int length = row % 5 == 0 ? 5 : 2;
                     const COLORREF tick = row % 5 == 0
-                        ? LerpCol(t.hint, t.bar, .34f + .34f * heat)
-                        : LerpCol(t.hint, t.underline, .42f + .22f * heat);
+                        ? t.bar
+                        : LerpCol(t.underline, t.hint, .30f);
                     for (int edge : { -64, 63 }) {
                         const int x = base + edge;
                         FillRectCol(S(x), S(y), S(x + (edge < 0 ? length : -length)), S(y + 1), tick);
