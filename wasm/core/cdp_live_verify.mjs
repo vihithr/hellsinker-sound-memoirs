@@ -1,0 +1,26 @@
+const tabs = await (await fetch("http://127.0.0.1:9224/json")).json();
+const tab = tabs.find(t => t.type === "page");
+const ws = new WebSocket(tab.webSocketDebuggerUrl);
+await new Promise(r => ws.onopen = r);
+let id = 0; const pending = new Map();
+ws.onmessage = e => { const m = JSON.parse(e.data); if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id); } };
+const call = (method, params = {}) => new Promise(resolve => { const n = ++id; pending.set(n, resolve); ws.send(JSON.stringify({ id: n, method, params })); });
+await call("Runtime.enable");
+const ev = async expr => (await call("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true })).result?.result?.value;
+const R = {};
+R.stage0 = await ev("window.__hsTest.stage");
+await ev("document.getElementById('aux-stage').click()"); R.stage1 = await ev("window.__hsTest.stage");
+R.wing0 = await ev("window.__hsTest.wing");
+await ev("document.getElementById('aux-wing').click()"); R.wing1 = await ev("window.__hsTest.wing");
+R.layout0 = await ev("window.__hsTest.layout");
+await ev("document.getElementById('aux-layout').click()"); R.layout1 = await ev("window.__hsTest.layout");
+const th0 = await ev("window.__hsTest.theme");
+await ev("document.getElementById('aux-theme').click()"); R.themeChanged = (await ev("window.__hsTest.theme")) !== th0;
+// LIB FONT: go SYS, row 3, toggle
+await ev("window.__hsTest.clickCanvas(466,280)");
+for (let i=0;i<3;i++) await ev("window.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown'}))");
+R.libFont0 = await ev("window.__hsTest.libFont");
+await ev("window.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight'}))");
+R.libFont1 = await ev("window.__hsTest.libFont");
+console.log(JSON.stringify(R, null, 2));
+ws.close();
