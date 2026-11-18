@@ -10,8 +10,9 @@ dist/
 hsbgm.ini
 hsbgm.catalog*
 
-# generated extras (only cells_<i>.bmp is embedded by src/memoirs.rc)
-assets/themed/title_*.bmp
+# generated extras (cells_<i>.bmp and title_<i>.bmp ARE embedded by
+# src/memoirs.rc, so they must stay tracked for a clean-clone build;
+# axis_<i>.bmp is only used by the wasm asset pipeline and is not embedded)
 assets/themed/axis_*.bmp
 
 # python
