@@ -65,7 +65,7 @@
 
 ## 下载
 
-到 [Releases](../../releases) 下载 `hsbgm.exe`，双击即可运行。
+到 [Releases](https://github.com/vihithr/hellsinker-sound-memoirs/releases/latest) 下载 `hsbgm.exe`，双击即可运行。
 
 播放**游戏曲目**需要本机装有正版 HellSinker。程序会自动探测常见安装路径，也可以在
 exe 同目录的 `hsbgm.ini` 里改 `GameDir=`，或用 `--gamedir <路径>` 指定。
@@ -148,3 +148,16 @@ USAGE.md              面向使用者的文档
 
 本仓库自有代码以 [MIT](LICENSE) 授权。第三方组件与界面文本资源另按其各自许可，
 详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+---
+
+## English
+
+A standalone Win32 jukebox that recreates the **SOUND MEMOIRS** screen from *Hellsinker* — the 5×10 track grid, 43-band spectrum, level meters, waveform and the one-second `PLAY TIME` tick — and can also play your own local music library.
+
+- **Download:** grab `hsbgm.exe` from [Releases](https://github.com/vihithr/hellsinker-sound-memoirs/releases/latest) and run it. No runtime required.
+- **Game tracks:** install a legitimate copy of Hellsinker. The player auto-detects common install paths; otherwise set `GameDir=` in `hsbgm.ini` or pass `--gamedir <path>`.
+- **Local music:** `hsbgm.exe --file "D:\music\song.mp3"`.
+- **Build:** Visual Studio 2022 with the x86 toolchain, then run `build.bat` in the repository root.
+- **Web/WASM experiment:** https://vihithr.github.io/hellsinker-sound-memoirs/
+
+The interface follows the original 640×480 layout, with five themes (ORIGINAL / DARK / NEON / PAPER / BLUEPRINT), `TR` for game tracks and `LIB` for local files. See [USAGE.md](USAGE.md) for the full key map.
