@@ -47,12 +47,14 @@ python -m http.server 8080
 | Tab | 在 FIELD / CROSS 布局中呼出原版网格 |
 | 鼠标单击 / 双击 | 选中 / 播放（EXIT 双击停止） |
 | 拖放文件 | 多文件入播放列表 |
+| F1 / F2 / F3 | 切换 TR / LIB / SYS 页 |
+| Alt+Enter | 切换全屏（画面右下角辅助按钮也可，静止后自动淡出） |
 
 ## 内容边界
 
 已复刻：Original 及 FIELD/STACK/RING/CROSS 布局、4 种 stage 演出、5 种主题、43 段频谱、电平、波形、标题与频率轴、入场/闪烁/选中脉冲动画，以及 PAK/WAV/OGG 解码与 125ms 视觉游标补偿。
 
-未包含：LIB / SYS 页的 CJK 文本绘制、系统曲库持久化、MP3（Media Foundation）、流式解码（单曲上限 96 MiB）。
+未包含：搜索框内的 ID3 元数据（艺人/专辑）完整解析、系统曲库持久化、MP3 解码、流式解码（单曲上限 96 MiB）。
 
 ## 体积
 
