@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<link rel="icon" href="data:,"><title>SOUND MEMOIRS</title>
+<link rel="stylesheet" href="screen.css">
+<div id="stage">
+  <canvas id="screen" width="640" height="480" tabindex="0" aria-label="SOUND MEMOIRS 640x480 画面"></canvas>
+  <div id="aux">
+    <button id="aux-prev" aria-label="上一曲">⏮</button>
+    <button id="aux-play" aria-label="播放 / 暂停">▶</button>
+    <button id="aux-next" aria-label="下一曲">⏭</button>
+    <button id="aux-load" aria-label="载入文件">+</button>
+    <button id="aux-page" aria-label="切换页面">▤</button>
+    <button id="aux-theme" aria-label="切换主题配色">◐</button>
+    <button id="aux-stage" aria-label="切换演出">✧</button>
+    <button id="aux-wing" aria-label="切换侧翼">◈</button>
+    <button id="aux-layout" aria-label="切换布局">▦</button>
+    <button id="aux-help" aria-label="操作帮助">?</button>
+    <button id="aux-full" aria-label="全屏">⛶</button>
+  </div>
+  <div id="help" aria-hidden="true">
+    <b>SOUND MEMOIRS — 操作</b>
+    <span>点 ▶ 播放 / 暂停　⏮ ⏭ 上一曲 / 下一曲　双击曲目播放</span>
+    <span>方向键 选曲　S 或 Esc 停止　C/T 主题色</span>
+    <span>F7 演出　F8 侧翼　F9 布局　F1/F2/F3 切页　Ctrl+O 载入</span>
+    <span>LIB 底部 ORDER：顺序 / 单曲 / 列表循环 / 随机，播完自动接下一曲</span>
+    <span>右下：▶ 播放　+ 载入　▤ 切页　◐ 主题　✧ 演出　◈ 侧翼　▦ 布局　? 帮助　⛶ 全屏</span>
+  </div>
+</div>
+<input id="files" type="file" multiple accept="audio/*,.pak,.ogg,.wav,.flac,.mp3,.m4a" hidden>
+<script type="module" src="app.js"></script>
+</html>
