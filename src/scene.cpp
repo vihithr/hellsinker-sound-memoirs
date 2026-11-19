@@ -1311,18 +1311,18 @@ void PaintDiveLayout() {
     };
 
     struct Frame { float half; float ang; float u; int age; float drive; };
-    Frame fr[6];
-    for (int k = 0; k < K; ++k) {
-        const float u = (k + frac) / K;              // 0 new/far .. 1 old/near
+    // K visible slots + 1 extra "just-recycled" anchor so the rail between
+    // the outermost visible layer and the one that just left stays drawn.
+    Frame fr[7];
+    for (int k = 0; k <= K; ++k) {
+        const float u = (k + frac) / K;              // 0 new/far .. >1 left
         const int age = base - k;
         fr[k].u = u;
         fr[k].age = age;
-        // true perspective: a point at depth z projects to size ~ 1/z.
-        // The z floor is small enough that a layer grows well past the
-        // screen (half > 800) before its slot recycles: it keeps expanding
-        // off-frame instead of stopping at the screen and vanishing.
+        // true perspective: size ~ 1/z. The extra anchor (u>1) keeps growing
+        // past the frame so its rail endpoint is far off-screen, not snapped.
         const float z = std::max(0.008f, 1.f - u);
-        fr[k].half = std::min(4000.f, 13.f / z);
+        fr[k].half = std::min(6000.f, 13.f / z);
         fr[k].drive = std::clamp((hist(age, 0) + hist(age, 1)) * 0.5f, 0.f, 1.f);
         fr[k].ang = age * 0.5f + (active ? float(g_state->seconds) * 0.55f : 0.f);
     }
@@ -1330,14 +1330,13 @@ void PaintDiveLayout() {
     // tunnel-wall rails: connect each layer's 8 vertices to the next layer's
     // corresponding vertex. Odd vertices carry the L waveform, even the R,
     // displaced perpendicular to the rail - the walls are live scopes.
-    for (int k = 0; k + 1 < K; ++k) {
+    for (int k = 0; k + 1 <= K; ++k) {
         const Frame& A = fr[k];      // farther
-        const Frame& B = fr[k + 1];  // nearer
-        // NOTE: no cull here. Even when the nearer layer's own geometry is
-        // off-screen, its vertices still anchor the rail so the waveform
-        // line between the last two layers never breaks; the polyline is
-        // simply clipped at the screen edge by the backend.
-        const float depth = A.u;
+        const Frame& B = fr[k + 1];  // nearer (may be the recycled anchor)
+        // No cull: the rail to the just-recycled layer keeps tracing to the
+        // screen edge until that anchor itself is gone, so the scope line
+        // between the last two layers never breaks.
+        const float depth = std::min(1.f, A.u);
         const float fade = std::min(0.96f, std::pow(1.f - depth, 1.6f));
         const COLORREF railC = LerpCol(t.frame, t.panel, fade);
         for (int c = 0; c < 8; ++c) {
@@ -1469,23 +1468,29 @@ void PaintDiveLayout() {
             const float phase = float(g_state->tick) / 60.f * 2.f * kPi / 1.8f + k * 1.3f;
             float pulse = 0.5f + 0.5f * sinf(phase);
             pulse = pulse * pulse * pulse;                 // sharp flash peak
+            // never fully dark: a resting ember stays lit between flashes
+            const float glow = 0.22f + 0.78f * pulse;
             const float blur = 2.f + 9.f * pulse;          // edge blur radius
+            // theme-coherent: halo is the hot accent, core lifts toward the
+            // theme ink (not raw white) so the glare keeps the palette's hue
             const COLORREF halo = LerpCol(t.stripHot, t.panel, fade * 0.4f);
-            const COLORREF core = LerpCol(halo, RGB(255, 255, 255), 0.35f + 0.55f * pulse);
+            const COLORREF core = LerpCol(halo, t.ink, 0.25f + 0.45f * pulse);
             for (int c = 0; c < 8; ++c) {
                 const int bx = oct[c].x, by = oct[c].y;
                 const int b = int(blur);
-                // outer soft halo (blur grows with the flash)
+                // soft radial halo, no hard square body at any phase
                 AlphaFill(bx - b - 3, by - b - 3, bx + b + 4, by + b + 4,
-                          halo, int(18 + 40 * pulse));
+                          halo, int((18 + 40 * pulse) * glow));
                 AlphaFill(bx - b, by - b, bx + b + 1, by + b + 1,
-                          halo, int(40 + 80 * pulse));
+                          halo, int((40 + 80 * pulse) * glow));
                 AlphaFill(bx - b / 2 - 1, by - b / 2 - 1, bx + b / 2 + 2, by + b / 2 + 2,
-                          halo, int(70 + 110 * pulse));
-                // overexposed core: small and crisp when dim, blazing when lit
+                          halo, int((70 + 110 * pulse) * glow));
+                // bright centre is itself a tiny soft glow, never a solid block
                 const int cs = 1 + int(2 * pulse);
+                AlphaFill(bx - cs - 1, by - cs - 1, bx + cs + 2, by + cs + 2,
+                          core, int((90 + 90 * pulse) * glow));
                 AlphaFill(bx - cs, by - cs, bx + cs + 1, by + cs + 1,
-                          core, int(150 + 105 * pulse));
+                          core, int((150 + 105 * pulse) * glow));
             }
         }
     }
