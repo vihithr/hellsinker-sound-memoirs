@@ -36,8 +36,12 @@ export async function createScene(canvas, core) {
   function glareSprite(w, h, cr, cg, cb) {
     const key = w + "x" + h + ":" + cr + "," + cg + "," + cb;
     let s = glareCache.get(key);
-    if (s) return s;
-    if (glareCache.size > 256) return null;
+    if (s) { glareCache.delete(key); glareCache.set(key, s); return s; }
+    if (glareCache.size >= 96) {
+      // LRU evict: a full cache must never permanently disable the glare
+      const oldest = glareCache.keys().next().value;
+      glareCache.delete(oldest);
+    }
     s = document.createElement("canvas");
     s.width = w; s.height = h;
     const sc = s.getContext("2d");

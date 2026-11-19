@@ -558,6 +558,10 @@ try{
   refreshTitle();
   let last=-Infinity;
   const drawFrame=(now=0)=>{
+    // Always re-arm first: any exception below must not kill the render loop
+    // (a dead rAF chain freezes the whole player on the last painted frame).
+    requestAnimationFrame(drawFrame);
+    try{
     if(now-last>=1000/60-.5){
       last=now;tick++;
       const seconds=position();
@@ -634,7 +638,10 @@ try{
       draw({hintTheme:theme,hint});
       updatePlayButton();
     }
-    requestAnimationFrame(drawFrame);
+    }catch(e){
+      // Surface the failure once instead of freezing silently.
+      if(!window.__drawErr){window.__drawErr=String(e&&e.stack||e);console.error("drawFrame:",e);}
+    }
   };
   // Optional deep-link: #sys / #lib selects the initial page (handy for tests).
   const h=(location.hash||"").toLowerCase();

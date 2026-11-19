@@ -3,7 +3,7 @@
 // Bresenham instead of using Canvas stroke() (which always antialiases).
 const GFX_CLEAR = 1, GFX_RECT = 2, GFX_ALPHA_RECT = 3, GFX_LINE = 4,
       GFX_POLYLINE = 5, GFX_POLYGON = 6, GFX_ELLIPSE = 7, GFX_BLIT = 8,
-      GFX_PUSH_CLIP = 9, GFX_POP_CLIP = 10;
+      GFX_PUSH_CLIP = 9, GFX_POP_CLIP = 10, GFX_ALPHA_ELLIPSE = 11;
 const CMD_SIZE = 20;
 
 export async function createScene(canvas, core) {
@@ -28,6 +28,31 @@ export async function createScene(canvas, core) {
 
   // COLORREF is 0x00BBGGRR; CSS wants rgb(R,G,B).
   const css = c => `rgb(${c & 255},${(c >> 8) & 255},${(c >> 16) & 255})`;
+
+  // Cached radial-glare sprites (offscreen canvases) keyed by size+color.
+  // Building a Canvas gradient per beacon per frame is heavy; drawImage of a
+  // pre-rendered disc is cheap. globalAlpha applies the per-frame brightness.
+  const glareCache = new Map();
+  function glareSprite(w, h, cr, cg, cb) {
+    const key = w + "x" + h + ":" + cr + "," + cg + "," + cb;
+    let s = glareCache.get(key);
+    if (s) { glareCache.delete(key); glareCache.set(key, s); return s; }
+    if (glareCache.size >= 96) {
+      // LRU evict: a full cache must never permanently disable the glare
+      const oldest = glareCache.keys().next().value;
+      glareCache.delete(oldest);
+    }
+    s = document.createElement("canvas");
+    s.width = w; s.height = h;
+    const sc = s.getContext("2d");
+    const g = sc.createRadialGradient(w / 2, h / 2, 0, w / 2, h / 2, Math.max(w, h) / 2);
+    g.addColorStop(0, `rgba(${cr},${cg},${cb},1)`);
+    g.addColorStop(1, `rgba(${cr},${cg},${cb},0)`);
+    sc.fillStyle = g;
+    sc.fillRect(0, 0, w, h);
+    glareCache.set(key, s);
+    return s;
+  }
 
   function line(x0, y0, x1, y1, color, width) {
     x0 |= 0; y0 |= 0; x1 |= 0; y1 |= 0;
@@ -115,6 +140,20 @@ export async function createScene(canvas, core) {
                       Math.abs(x1 - x0) / 2, Math.abs(y1 - y0) / 2,
                       0, 0, Math.PI * 2);
           ctx.fill(); break;
+        case GFX_ALPHA_ELLIPSE: {
+          // soft radial glare via a cached sprite; globalAlpha = brightness
+          const w = Math.abs(x1 - x0), h = Math.abs(y1 - y0);
+          if (w <= 0 || h <= 0 || w > 128 || h > 128) break;
+          const m = /rgb\((\d+),(\d+),(\d+)\)/.exec(color);
+          const cr = m ? +m[1] : 255, cg = m ? +m[2] : 255, cb = m ? +m[3] : 255;
+          const s = glareSprite(w, h, cr, cg, cb);
+          if (!s) break;
+          ctx.save();
+          ctx.globalAlpha = alpha / 255;
+          ctx.drawImage(s, Math.min(x0, x1), Math.min(y0, y1), w, h);
+          ctx.restore();
+          break;
+        }
         case GFX_BLIT: {
           // Shared gfx_blit carries destination size in the second point.
           // A {0,0} size falls back to the source cell size (revision-1 streams).

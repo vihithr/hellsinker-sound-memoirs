@@ -214,12 +214,18 @@ struct GlareSprite {
 GlareSprite g_glare[160];
 int g_glareCount = 0;
 
+int g_glareNext = 0;
 GlareSprite* glareGet(int w, int h, COLORREF c) {
     for (int i = 0; i < g_glareCount; ++i)
         if (g_glare[i].w == w && g_glare[i].h == h && g_glare[i].col == c)
             return &g_glare[i];
-    if (g_glareCount >= 160) return nullptr;       // cache full: skip this glow
-    GlareSprite& s = g_glare[g_glareCount++];
+    // ring eviction: reuse the oldest slot instead of disabling the glare
+    int idx;
+    if (g_glareCount < 160) idx = g_glareCount++;
+    else { idx = g_glareNext; g_glareNext = (g_glareNext + 1) % 160; }
+    GlareSprite& s = g_glare[idx];
+    if (s.bmp) { DeleteObject(s.bmp); s.bmp = nullptr; }
+    if (s.dc) { DeleteDC(s.dc); s.dc = nullptr; }
     s.w = w; s.h = h; s.col = c;
     BITMAPINFO bi{};
     bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
@@ -231,7 +237,7 @@ GlareSprite* glareGet(int w, int h, COLORREF c) {
     void* bits = nullptr;
     s.dc = CreateCompatibleDC(nullptr);
     s.bmp = CreateDIBSection(s.dc, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
-    if (!s.bmp) { DeleteDC(s.dc); s.dc = nullptr; g_glareCount--; return nullptr; }
+    if (!s.bmp) { DeleteDC(s.dc); s.dc = nullptr; s.w = 0; return nullptr; }
     SelectObject(s.dc, s.bmp);
     const float rx = w * 0.5f, ry = h * 0.5f;
     const int R = GetRValue(c), G = GetGValue(c), B = GetBValue(c);
