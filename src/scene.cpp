@@ -1425,20 +1425,23 @@ void PaintHelixLayout() {
     const double yaw = std::fmod(clock * .075, 6.283185307179586);
     const float cs = float(std::cos(yaw)), sn = float(std::sin(yaw));
     struct CoilPoint { float x, y, z; };
-    auto coil = [&](float y, int side, int strand) -> CoilPoint {
+    auto coil = [&](float y, int side, int strand, bool scope=false) -> CoilPoint {
         const float hand = side ? 1.f : -1.f;
         const float meter = g_mem ? g_mem->meter[side] : 0.f;
-        const double turn = (y-wt)*.049 + side*.8 + strand*3.14159265;
-        const float radius = 27.f + 8.f*meter;
-        const float x = hand * .38f * (y - .5f*(wt+wb)) + radius*float(std::sin(turn));
+        const double turn = (y-wt)*.049 + side*.8 + clock*(side ? -.17 : .20) + strand*3.14159265;
+        const float* wave = side ? g_state->spectrum.waveR : g_state->spectrum.waveL;
+        const int sample = std::clamp(int((y-wt)*239.f/(wb-wt)),0,239);
+        const float spike = std::clamp(std::abs(wave[sample])/48.f,0.f,1.f);
+        const float radius = 27.f + 8.f*meter + (scope ? 4.f + 15.f*spike*spike : 0.f);
+        const float x = hand * (.38f * (y - .5f*(wt+wb)) + 6.f*std::sin((y-wt)*.014f)) + radius*float(std::sin(turn));
         const float depth = hand * 32.f + radius*float(std::cos(turn));
         const float cameraDepth = depth*cs - x*sn;
         return {cx + x*cs + depth*sn, y + .12f*cameraDepth, cameraDepth/96.f};
     };
-    struct Stroke { CoilPoint a,b; int side; bool bond; };
+    struct Stroke { CoilPoint a,b; int side; bool bond; bool scope=false; };
     constexpr int step = 3, margin = 32, stepsPerBond = 4;
     constexpr int maxSteps = (kLogicalH + 2 * margin) / step + 2;
-    Stroke strokes[4 * maxSteps + 4 * (maxSteps / stepsPerBond + 1)];
+    Stroke strokes[8 * maxSteps + 4 * (maxSteps / stepsPerBond + 1)];
     int used = 0;
     for (int side = 0; side < 2; ++side) {
         const float top = wt - margin;
@@ -1448,6 +1451,7 @@ void PaintHelixLayout() {
             for (int strand = 0; strand < 2; ++strand) {
                 const CoilPoint end = coil(y, side, strand);
                 strokes[used++] = {prev[strand], end, side, false};
+                strokes[used++] = {coil(y-step,side,strand,true),coil(y,side,strand,true),side,false,true};
                 prev[strand] = end;
             }
             if (j % stepsPerBond == 0) {
@@ -1462,11 +1466,11 @@ void PaintHelixLayout() {
         const Stroke& v = strokes[i];
         const float light = std::clamp(.5f + .25f * (v.a.z + v.b.z), 0.f, 1.f);
         const COLORREF backbone = v.side ? t.bar : LerpCol(t.wave,t.ink,.23f);
-        const COLORREF pigment = v.bond ? (LightTheme() ? t.digit : t.ink) : backbone;
+        const COLORREF pigment = v.bond ? (v.side ? LerpCol(t.wave,t.ink,.23f) : t.bar) : backbone;
         const float fade = v.bond ? .28f + .40f * (1.f-light) - .22f*(g_mem ? g_mem->coilAttack[v.side] : 0.f) : .04f + .61f * (1.f-light);
         const COLORREF ink = LerpCol(pigment, CustomPanelCol(), fade);
         GfxPoint seg[] = {ScenePoint(v.a.x,v.a.y),ScenePoint(v.b.x,v.b.y)};
-        gfx_polyline(seg,2,ink,S(v.bond ? 1 : light>.58f ? 3 : 2));
+        gfx_polyline(seg,2,v.scope ? LerpCol(ink,CustomPanelCol(),.4f) : ink,S(v.bond || v.scope ? 1 : light>.58f ? 3 : 2));
     }
     gfx_pop_clip();
 
@@ -1562,7 +1566,7 @@ void PaintDiveLayout() {
         // exponential-equal spacing: 14 -> 27 -> 53 -> 104 -> 203 -> 392px,
         // every octave of depth gets one layer (no mid-field hole)
         fr[k].half = std::min(2200.f, 14.f * std::pow(28.f, u));
-        fr[k].ang = age * 0.10f + rot;               // slight spiral, not a wring
+        fr[k].ang = age * 0.27f + rot;               // slight spiral, not a wring
     }
 
     const float imp = Impact();
@@ -1698,7 +1702,8 @@ void PaintDiveLayout() {
                 const int c=i/30, next=(c+1)%8;
                 const float u=(i%30)/30.f;
                 const float* wave=c%2 ? g_state->spectrum.waveR : g_state->spectrum.waveL;
-                const float offset=.22f*std::clamp(wave[i]/56.f,-1.f,1.f);
+                const float sample=std::clamp(wave[i]/56.f,-1.f,1.f);
+                const float offset=.135f*sample*std::abs(sample);
                 const float radius= .90f-offset;
                 trace[i]=pt((ovx[c]+(ovx[next]-ovx[c])*u)*radius,
                             (ovy[c]+(ovy[next]-ovy[c])*u)*radius);
