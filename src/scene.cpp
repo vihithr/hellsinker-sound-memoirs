@@ -1665,23 +1665,36 @@ void PaintDiveLayout() {
         }
     }
 
-    // ---- continuous corridor edges: connect each layer's 8 vertices to ----
-    // the next layer's corresponding vertex (incl. the recycled anchor), so
-    // the transparent tunnel reads as one connected 3D walkway.
+    // ---- live corridor edges: each layer's 8 vertices connect to the next
+    // layer's corresponding vertex (incl. the recycled anchor) as running
+    // scopes - odd vertices carry the L wave, even the R, displaced
+    // perpendicular to the edge, so the walkway walls dance with the music.
     for (int k = 0; k + 1 <= K; ++k) {
         const Frame& A = fr[k];
         const Frame& B = fr[k + 1];
         const float depth = std::min(1.f, A.u);
         const float fade = std::pow(1.f - depth, 1.35f);
-        const COLORREF ec = DepthInk(CustomFrameCol(), 0.25f + 0.65f * fade);
         for (int c = 0; c < 8; ++c) {
             const float aa = kPi / 8.f + c * kPi / 4.f;
-            GfxPoint seg[2] = {
-                { (std::int16_t)S(cx + int(A.half * cosf(aa + A.ang))),
-                  (std::int16_t)S(cy + int(A.half * sinf(aa + A.ang))) },
-                { (std::int16_t)S(cx + int(B.half * cosf(aa + B.ang))),
-                  (std::int16_t)S(cy + int(B.half * sinf(aa + B.ang))) } };
-            gfx_polyline(seg, 2, ec, S(1));
+            const float ax = A.half * cosf(aa + A.ang), ay = A.half * sinf(aa + A.ang);
+            const float bx = B.half * cosf(aa + B.ang), by = B.half * sinf(aa + B.ang);
+            const float dx = bx - ax, dy = by - ay;
+            const float len = std::sqrt(dx * dx + dy * dy);
+            if (len < 2.f) continue;
+            const float nx = -dy / len, ny = dx / len;
+            const float* wv = (c % 2) ? g_state->spectrum.waveL : g_state->spectrum.waveR;
+            const COLORREF ec = DepthInk((c % 2) ? t.wave : LerpCol(t.wave, t.bar, 0.45f),
+                                         0.20f + 0.60f * fade);
+            const int RS = 16;
+            GfxPoint rail[17];
+            for (int i = 0; i <= RS; ++i) {
+                const float tt = float(i) / RS;
+                const float v = std::clamp(wv[(i * 14) % 240] / 64.f, -1.f, 1.f);
+                const float disp = v * std::min(14.f, len * 0.10f);
+                rail[i] = { (std::int16_t)S(cx + int(ax + dx * tt + nx * disp)),
+                            (std::int16_t)S(cy + int(ay + dy * tt + ny * disp)) };
+            }
+            gfx_polyline(rail, RS + 1, ec, S(1));
         }
     }
 
@@ -1713,8 +1726,10 @@ void PaintDiveLayout() {
             GfxPoint rim[2] = { oct[c], oct[(c + 1) % 8] };
             gfx_polyline(rim, 2, rimC, rimW);
         }
-        // spectrum teeth: slim sharp inward needles (35% segment duty, max
-        // depth half*0.14) - light, agile, never a fat slab wall
+        // spectrum teeth in the ORIGINAL window's language: each band grows
+        // inward as stacked 2px hard segments with 1px seams (55% segment
+        // duty, max depth half*0.16), bar for the level and barLit for the
+        // decay tail - segmented pixel bars, not solid slabs or needles
         if (F.half >= 34.f) {
             const COLORREF toothC = DepthInk(t.bar, fade);
             const COLORREF tailC = DepthInk(t.barLit, fade);
@@ -1731,24 +1746,22 @@ void PaintDiveLayout() {
                     const int band = c * 5 + m;
                     const float lv = Lv(band);
                     const float pv = stage::bandLevel(g_state->spectrum.barsPrev[band]);
-                    const float d = F.half * 0.14f * lv;
-                    const float pd = F.half * 0.14f * pv;
-                    const float s0 = (m + 0.325f) / 5.f, s1 = (m + 0.675f) / 5.f;
+                    const float d = F.half * 0.16f * lv;
+                    const float pd = F.half * 0.16f * pv;
+                    const float s0 = (m + 0.225f) / 5.f, s1 = (m + 0.775f) / 5.f;
                     const float ax = ovx[c] + ex * s0, ay = ovy[c] + ey * s0;
                     const float bx = ovx[c] + ex * s1, by = ovy[c] + ey * s1;
-                    if (pd > d + 1.f) {
-                        GfxPoint tail[4] = { pt(ax + nx * d, ay + ny * d),
-                                             pt(bx + nx * d, by + ny * d),
-                                             pt(bx + nx * pd, by + ny * pd),
-                                             pt(ax + nx * pd, ay + ny * pd) };
-                        gfx_polygon(tail, 4, tailC);
-                    }
-                    if (d >= 1.f) {
-                        GfxPoint tooth[4] = { pt(ax, ay), pt(bx, by),
-                                              pt(bx + nx * d, by + ny * d),
-                                              pt(ax + nx * d, ay + ny * d) };
-                        gfx_polygon(tooth, 4, toothC);
-                    }
+                    auto seg = [&](float d0, float d1, COLORREF col) {
+                        GfxPoint q[4] = { pt(ax + nx * d0, ay + ny * d0),
+                                          pt(bx + nx * d0, by + ny * d0),
+                                          pt(bx + nx * d1, by + ny * d1),
+                                          pt(ax + nx * d1, ay + ny * d1) };
+                        gfx_polygon(q, 4, col);
+                    };
+                    for (float r = 0.f; r < d; r += 3.f)
+                        seg(r, std::min(r + 2.f, d), toothC);
+                    for (float r = d; r < pd; r += 3.f)
+                        seg(r, std::min(r + 2.f, pd), tailC);
                 }
             }
         }

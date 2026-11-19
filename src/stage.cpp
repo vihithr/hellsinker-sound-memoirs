@@ -29,15 +29,16 @@ float channelDrive(float env,const float* wave){
     return smoothstep(.02f,.78f,std::max(env*2.7f,rms*1.8f));
 }
 // Honest meter curve for the custom layouts: mix RMS with the envelope,
-// drop a 5% noise floor, compress with gamma 1.35 - no overload gain, so
-// ordinary music sits at 40..85% and only genuine peaks reach full scale.
+// mild 1.15x presence gain, 4% noise floor, gamma 0.8 (expansive below 1) -
+// ordinary music rides high at 55..85% and still visibly breathes; only a
+// genuinely hot passage pegs the top (no 2.7x overload pinning).
 float calibratedMeter(float env,const float* wave){
     double sum=0;
     for(int i=0;i<240;i+=4){const double v=wave[i]/64.0;sum+=v*v;}
     const float rms=float(std::sqrt(sum/60.0));
-    const float raw=std::clamp(std::max(env*0.95f,rms*1.05f),0.f,1.f);
-    const float y=std::clamp((raw-0.05f)/0.92f,0.f,1.f);
-    return std::pow(y,1.35f);
+    const float raw=std::clamp(std::max(env*1.15f,rms*1.30f),0.f,1.f);
+    const float y=std::clamp((raw-0.04f)/0.94f,0.f,1.f);
+    return std::pow(y,0.8f);
 }
 }
 void Memory::advance(const memoirs::Spectrum& s,int id,double seconds,bool playing,bool paused){
