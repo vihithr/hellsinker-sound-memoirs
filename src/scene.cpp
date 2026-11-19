@@ -1352,46 +1352,71 @@ void PaintDiveLayout() {
                      (std::int16_t)S(cy + int(lx * sa + ly * ca)) };
         };
         // the positioning frame is a REGULAR octagon of 8 hard beacon lights
-        // at radius half. The # lives inside it: edges at +-0.55*half, span
-        // +-0.62*half, swing capped so no strand ever crosses the octagon.
-        const float off = F.half * 0.55f;
-        const float reach = F.half * 0.58f;
+        // at radius half. The # is four INFINITE lines clipped by that
+        // octagon: each edge runs along its line until it hits the boundary,
+        // and the DNA helix winds uniformly over that whole visible span.
+        float ovx[8], ovy[8];
         GfxPoint oct[8];
         for (int c = 0; c < 8; ++c) {
             const float a = kPi / 8.f + c * kPi / 4.f;
-            oct[c] = pt(F.half * cosf(a), F.half * sinf(a));
+            ovx[c] = F.half * cosf(a);
+            ovy[c] = F.half * sinf(a);
+            oct[c] = pt(ovx[c], ovy[c]);
         }
-        // faint octagon rim: the boundary the helices must stay inside
+        // faint octagon rim: the clipping boundary
         for (int c = 0; c < 8; ++c) {
             GfxPoint rim[2] = { oct[c], oct[(c + 1) % 8] };
             gfx_polyline(rim, 2, LerpCol(t.frame, t.panel, 0.45f + fade * 0.4f), 1);
         }
-        const int ES = 24;                     // samples along each edge
-        // max swing that keeps the helix corner (reach, off+amp) inside the
-        // octagon circumradius with a small margin
-        const float maxAmp = std::max(2.f, std::sqrt(std::max(0.f,
-            F.half * F.half * 0.94f - reach * reach)) - off);
+        // clip the infinite line P + t*D against the convex octagon by
+        // intersecting it with every rim segment (robust, winding-agnostic)
+        auto clipLine = [&](float px, float py, float dx, float dy,
+                            float& t0, float& t1) -> bool {
+            t0 = 1e9f; t1 = -1e9f;
+            bool hit = false;
+            for (int c = 0; c < 8; ++c) {
+                const int n = (c + 1) % 8;
+                const float ax = ovx[c], ay = ovy[c];
+                const float ex = ovx[n] - ax, ey = ovy[n] - ay;
+                // solve P + t*D = A + s*E
+                const float den = dx * ey - dy * ex;
+                if (std::abs(den) < 1e-6f) continue;       // parallel
+                const float tt = ((ax - px) * ey - (ay - py) * ex) / den;
+                const float ss = ((ax - px) * dy - (ay - py) * dx) / den;
+                if (ss < -0.001f || ss > 1.001f) continue; // outside segment
+                t0 = std::min(t0, tt); t1 = std::max(t1, tt);
+                hit = true;
+            }
+            return hit && t0 < t1;
+        };
+        const float off = F.half * 0.42f;      // # bar offset: big centre hole
+        const float sideAmp = std::min(amp, F.half * 0.16f);
+        const int ES = 40;                     // samples along the clipped span
         for (int e = 0; e < 4; ++e) {
             const bool horiz = e < 2;
             const float eo = (e % 2) ? off : -off;
-            auto edgePt = [&](float p, float q) -> GfxPoint {
+            const float px = horiz ? 0.f : eo, py = horiz ? eo : 0.f;
+            const float dx = horiz ? 1.f : 0.f, dy = horiz ? 0.f : 1.f;
+            float t0, t1;
+            if (!clipLine(px, py, dx, dy, t0, t1)) continue;
+            auto edgePt = [&](float tt, float q) -> GfxPoint {
+                const float p = t0 + (t1 - t0) * tt;
                 return horiz ? pt(p, eo + q) : pt(eo + q, p);
             };
-            const float sideAmp = std::min(amp, maxAmp);
-            // base-pair bonds every 3rd sample
+            // base-pair bonds every 3rd sample, uniform winding (no taper)
             for (int i = 0; i <= ES; i += 3) {
-                const float p = -reach + 2.f * reach * i / ES;
-                const float h = sideAmp * sinf(2.f * kPi * 1.5f * i / ES + bias + e * 0.7f);
-                GfxPoint seg[2] = { edgePt(p, h), edgePt(p, -h) };
+                const float tt = float(i) / ES;
+                const float h = sideAmp * sinf(2.f * kPi * 2.5f * tt + bias + e * 0.7f);
+                GfxPoint seg[2] = { edgePt(tt, h), edgePt(tt, -h) };
                 gfx_polyline(seg, 2, rungC, 1);
             }
-            // the two strands winding along the edge, end to end
-            GfxPoint sA[25], sB[25];
+            // the two strands over the full clipped span, cut at the rim
+            GfxPoint sA[41], sB[41];
             for (int i = 0; i <= ES; ++i) {
-                const float p = -reach + 2.f * reach * i / ES;
-                const float h = sideAmp * sinf(2.f * kPi * 1.5f * i / ES + bias + e * 0.7f);
-                sA[i] = edgePt(p, h);
-                sB[i] = edgePt(p, -h);
+                const float tt = float(i) / ES;
+                const float h = sideAmp * sinf(2.f * kPi * 2.5f * tt + bias + e * 0.7f);
+                sA[i] = edgePt(tt, h);
+                sB[i] = edgePt(tt, -h);
             }
             gfx_polyline(sA, ES + 1, strandA, w);
             gfx_polyline(sB, ES + 1, strandB, w);
