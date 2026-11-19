@@ -1358,27 +1358,12 @@ void PaintHelixLayout() {
     // shaft geometry: wide well with regular guide-rail gutters
     const int wl = 176, wr = 464, wt = 34, wb = 446;
     const int cx = 320, pitch = 10, maxOff = 118;
-    const COLORREF wc = t.frame;
-    FillRectCol(S(wl - 14), S(wt), S(wr + 14), S(wb), t.panel);
+    const COLORREF wc = CustomFrameCol();
+    FillRectCol(S(wl - 14), S(wt), S(wr + 14), S(wb), CustomPanelCol());
     FillRectCol(S(wl - 14), S(wt), S(wl - 13), S(wb), wc);
     FillRectCol(S(wr + 13), S(wt), S(wr + 14), S(wb), wc);
     FillRectCol(S(wl - 14), S(wt), S(wr + 14), S(wt + 1), wc);
     FillRectCol(S(wl - 14), S(wb - 1), S(wr + 14), S(wb), wc);
-    if (LightTheme()) {
-        const COLORREF inner = LerpCol(t.frame, t.ink, 0.25f);
-        FillRectCol(S(wl - 13), S(wt), S(wl - 12), S(wb), inner);
-        FillRectCol(S(wr + 12), S(wt), S(wr + 13), S(wb), inner);
-    }
-    // shaft wall ticks every rung, longer every 5th
-    for (int y = wt; y <= wb; y += pitch) {
-        const int len = ((y - wt) / pitch) % 5 == 0 ? 8 : 4;
-        FillRectCol(S(wl - 14), S(y), S(wl - 14 + len), S(y + 1), LerpCol(t.frame, t.panel, 0.35f));
-        FillRectCol(S(wr + 14 - len), S(y), S(wr + 14), S(y + 1), LerpCol(t.frame, t.panel, 0.35f));
-    }
-    // sparse depth strata: one faint line every 40px, no dense dot matrix
-    const COLORREF strata = LerpCol(t.seam, t.panel, 0.45f);
-    for (int y = wt + 20; y < wb; y += 40)
-        FillRectCol(S(wl - 6), S(y), S(wr + 6), S(y + 1), strata);
 
     // rung positions: uniform UPWARD scroll, sub-row offset locked to the
     // same histClock phase that pushes the ring (zero tear, zero rebound)
@@ -1413,7 +1398,53 @@ void PaintHelixLayout() {
     };
 
     gfx_push_clip(S(wl - 14), S(wt + 1), S(wr + 14), S(wb - 1));
-    // rungs + cross pins, oldest at the top; beat rungs carry a 2px hot bar
+
+    // ---- two-layer parallax geology: the shaft walls scroll WITH the fall -
+    // far layer at 0.45x (deep outer wall), near layer at 1.0x (same clock
+    // as the DNA), so the descent reads against a moving reference frame.
+    const double clock = g_mem ? g_mem->sinkClock : 0.0;
+    {
+        // far: structural beams every 48px + diagonal wall braces
+        const int bgOff = int(std::fmod(clock * 0.45 * pitch, 48.0));
+        const COLORREF beam = LerpCol(CustomPanelCol(), t.seam, 0.50f);
+        for (int y = wt - 48; y < wb + 48; y += 48) {
+            const int yy = y - bgOff + 48;
+            if (yy < wt - 4 || yy > wb + 4) continue;
+            FillRectCol(S(wl - 6), S(yy), S(wr + 6), S(yy + 1), beam);
+            // 18px brace slots on both inner walls
+            for (int k = 0; k < 3; ++k) {
+                const int by = yy + 8 + k * 6;
+                FillRectCol(S(wl - 12 + k * 2), S(by), S(wl - 4 + k * 2), S(by + 1), beam);
+                FillRectCol(S(wr + 4 - k * 2), S(by), S(wr + 12 - k * 2), S(by + 1), beam);
+            }
+        }
+        // near: wall ruler ticks + rolling depth tags, locked to the DNA.
+        // World-indexed so the pattern scrolls continuously with no wrap jump.
+        const double T = clock * pitch;
+        const COLORREF nearC = LerpCol(CustomFrameCol(), CustomPanelCol(), 0.35f);
+        const int off10 = int(std::fmod(T, 10.0));
+        const int base10 = int(std::floor(T / 10.0));
+        for (int k = 0; k <= (wb - wt) / 10 + 1; ++k) {
+            const int yy = wb - k * 10 - off10;
+            if (yy < wt || yy > wb) continue;
+            const int len = (base10 + k) % 4 == 0 ? 8 : 4;
+            FillRectCol(S(wl - 14), S(yy), S(wl - 14 + len), S(yy + 1), nearC);
+            FillRectCol(S(wr + 14 - len), S(yy), S(wr + 14), S(yy + 1), nearC);
+        }
+        const int off80 = int(std::fmod(T, 80.0));
+        const int base80 = int(std::floor(T / 80.0));
+        for (int k = 0; k <= (wb - wt) / 80 + 1; ++k) {
+            const int yy = wb - k * 80 - off80;
+            if (yy < wt + 4 || yy > wb - 12) continue;
+            char db[8];
+            snprintf(db, sizeof(db), "D-%02d", (base80 + k) & 63);
+            DrawCellsTL(db, wl - 8, yy, 2);
+            FillRectCol(S(wl - 12), S(yy + 4), S(wl - 10), S(yy + 5), nearC);
+        }
+    }
+
+    // rungs + base-pair bonds, oldest at the top; beat rungs carry a 2px hot
+    // bar with a lit 4x4 coupling node at the bite point
     for (int j = rows; j >= 0; --j) {
         const int y = wb - j * pitch - frac;
         if (y < wt - pitch || y > wb + pitch) continue;
@@ -1422,31 +1453,48 @@ void PaintHelixLayout() {
         const bool hot = beat(row);
         const bool fresh = row == 0;
         const int pl = std::min(xl2, xr2), pr = std::max(xl2, xr2);
-        if (pr - pl > 3) {
-            const COLORREF pc = hot ? t.accentHot : fresh ? t.bar : t.barLit;
+        if (pr - pl > 6) {
+            // base pair: two half-bonds meeting at a 2px bite seam - left
+            // half wave (L chemistry), right half bar (R chemistry)
+            const int mid = (pl + pr) / 2;
             const int th = hot ? 2 : 1;
-            FillRectCol(S(pl + 2), S(y), S(pr - 1), S(y + th), pc);
+            const COLORREF lc = hot ? t.accentHot : t.wave;
+            const COLORREF rc = hot ? t.accentHot : t.bar;
+            FillRectCol(S(pl + 2), S(y), S(mid - 1), S(y + th), fresh ? t.bar : lc);
+            FillRectCol(S(mid + 1), S(y), S(pr - 1), S(y + th), fresh ? t.bar : rc);
+            if (hot) FillRectCol(S(mid - 2), S(y - 2), S(mid + 2), S(y + 2), t.accentHot);
         }
-        // rung nodes: 5x5 blocks - hollow hard frames normally, solid on a
-        // beat / the freshest sample (machine pins, not soft dots)
+        // rung nodes: front strand solid 5x5, back strand hollow frame
+        const float slopeL = float(strandX(row, 0) - strandX(row + 1, 0));
+        const float slopeR = float(strandX(row, 1) - strandX(row + 1, 1));
+        const bool frontL = std::abs(slopeL) >= std::abs(slopeR);
         const COLORREF lc = hot ? t.accentHot : fresh ? t.bar : t.wave;
         const COLORREF rc = hot ? t.accentHot : fresh ? t.bar : t.bar;
-        const bool solidL = hot || fresh, solidR = hot || fresh;
-        FillRectCol(S(xl2 - 2), S(y - 2), S(xl2 + 3), S(y + 3), lc);
-        if (!solidL) FillRectCol(S(xl2 - 1), S(y - 1), S(xl2 + 2), S(y + 2), t.panel);
-        FillRectCol(S(xr2 - 2), S(y - 2), S(xr2 + 3), S(y + 3), rc);
-        if (!solidR) FillRectCol(S(xr2 - 1), S(y - 1), S(xr2 + 2), S(y + 2), t.panel);
+        FillRectCol(S(xl2 - 2), S(y - 2), S(xl2 + 3), S(y + 3),
+                    frontL || hot || fresh ? lc : DepthInk(lc, 0.45f));
+        if (!frontL && !hot && !fresh)
+            FillRectCol(S(xl2 - 1), S(y - 1), S(xl2 + 2), S(y + 2), CustomPanelCol());
+        FillRectCol(S(xr2 - 2), S(y - 2), S(xr2 + 3), S(y + 3),
+                    !frontL || hot || fresh ? rc : DepthInk(rc, 0.45f));
+        if (frontL && !hot && !fresh)
+            FillRectCol(S(xr2 - 1), S(y - 1), S(xr2 + 2), S(y + 2), CustomPanelCol());
     }
-    // 2px strand segments between consecutive rung nodes, drawn after the
-    // pins so the strands read on top: L in wave, R in bar
+    // strand segments: the strand moving faster laterally reads as the FRONT
+    // chain (2px bright); the other sinks behind (1px depth-faded) - the DNA
+    // visibly rotates in 3D as the phase twist evolves
     for (int j = rows; j >= 1; --j) {
         const int y0 = wb - j * pitch - frac, y1 = wb - (j - 1) * pitch - frac;
         if (y1 < wt - pitch || y0 > wb + pitch) continue;
+        const float slopeL = float(strandX(j, 0) - strandX(j - 1, 0));
+        const float slopeR = float(strandX(j, 1) - strandX(j - 1, 1));
+        const bool frontL = std::abs(slopeL) >= std::abs(slopeR);
         for (int side = 0; side < 2; ++side) {
+            const bool front = side == 0 ? frontL : !frontL;
             GfxPoint seg[2] = {
                 { (std::int16_t)S(strandX(j, side)), (std::int16_t)S(y0) },
                 { (std::int16_t)S(strandX(j - 1, side)), (std::int16_t)S(y1) } };
-            gfx_polyline(seg, 2, side ? t.bar : t.wave, 2);
+            const COLORREF base = side ? t.bar : t.wave;
+            gfx_polyline(seg, 2, front ? base : DepthInk(base, 0.45f), front ? 2 : 1);
         }
     }
     gfx_pop_clip();

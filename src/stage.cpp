@@ -167,13 +167,20 @@ void Memory::advance(const memoirs::Spectrum& s,int id,double seconds,bool playi
             if((s.waveR[i-1]<0)!=(s.waveR[i]<0))++zcR;
         }
         const float znL=std::clamp(zcL/120.f,0.f,1.f), znR=std::clamp(zcR/120.f,0.f,1.f);
-        const float stepL=drive[0]<0.02f?0.f:drive[0]*(0.28f+0.95f*znL);
-        const float stepR=drive[1]<0.02f?0.f:drive[1]*(0.28f+0.95f*znR);
+        // Asymmetric DNA dance: a base spin while audible, per-channel
+        // zero-crossing modulation, plus a mid-vs-high spectral tilt that
+        // twists the R strand's phase - the pair tightens, opens and
+        // interleaves instead of converging to a rigid mirror image.
+        float mid=0;
+        for(int i=8;i<=22;++i)mid+=std::clamp(s.barsLevel[i]/96.f,0.f,1.f);
+        mid/=15.f;
+        const float baseSpin=(drive[0]+drive[1])>0.04f?0.22f:0.f;
+        const float stepL=baseSpin+drive[0]*(0.25f+0.85f*znL);
+        const float stepR=baseSpin+drive[1]*(0.22f+0.80f*znR)+(mid-high)*0.35f;
         windL+=stepL;
         windR+=stepR;
-        // antiphase pair: the two strands always cross into the # lattice
         histWaveL[histHead]=std::sin(windL);
-        histWaveR[histHead]=-std::sin(windR);
+        histWaveR[histHead]=std::sin(windR+2.6f+0.65f*std::sin(windL*0.35f));
     }
 
     // DIVE: freeze a birth snapshot whenever a new layer spawns (0.32/s on
