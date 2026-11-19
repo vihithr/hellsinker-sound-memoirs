@@ -9,7 +9,7 @@
 
 namespace {
 
-const char* kVersion = "hsbgm 1.1";
+const char* kVersion = "hsbgm 1.1.1";
 
 std::string IniPath(const std::string& exeDir) { return JoinPath(exeDir, "hsbgm.ini"); }
 

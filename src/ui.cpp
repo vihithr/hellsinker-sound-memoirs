@@ -803,6 +803,17 @@ void OnTimer(HWND hwnd) {
 
 constexpr UINT kLibraryCommand = 0x120;
 constexpr UINT kIntegerScaleCommand = 20;
+constexpr UINT kPlayPauseCommand = 0x130;
+constexpr UINT kStopCommand = 0x131;
+constexpr UINT kPreviousCommand = 0x132;
+constexpr UINT kNextCommand = 0x133;
+constexpr UINT kSeekBackCommand = 0x134;
+constexpr UINT kSeekForwardCommand = 0x135;
+constexpr UINT kOpenFilesCommand = 0x136;
+constexpr UINT kThemeCommand = 0x140;
+constexpr UINT kVolumeDownCommand = 0x150;
+constexpr UINT kVolumeUpCommand = 0x151;
+constexpr UINT kExitCommand = 0x152;
 void selectPage(HWND hwnd, Page next) {
     if(page==next) return;
     if(draggingSeek){ReleaseCapture();draggingSeek=false;}
@@ -832,24 +843,41 @@ void adjustSetting(int direction) {
     }
 }
 
+bool HandleGlobalShortcut(HWND hwnd, WPARAM key) {
+    PlayerApp& app = g_app;
+    if (key == VK_F6) { toggleIntegerScale(hwnd); return true; }
+    if (key == VK_F7) {
+        app.settings->stageMode = (app.settings->stageMode + 1) % stage::count;
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return true;
+    }
+    if (key == VK_F8) {
+        app.settings->wingMode = (app.settings->wingMode + 1) % stage::wingCount;
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return true;
+    }
+    if (key == VK_F9) {
+        app.settings->layoutMode = (app.settings->layoutMode + 1) % layout::Count;
+        fieldGrid = false;
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return true;
+    }
+    if (key >= VK_F1 && key <= VK_F3) {
+        selectPage(hwnd, Page(key - VK_F1));
+        return true;
+    }
+    return false;
+}
+
 void OnKeyDown(HWND hwnd, WPARAM key) {
     PlayerApp& app = g_app;
-    if(key==VK_F8){app.settings->wingMode=(app.settings->wingMode+1)%stage::wingCount;InvalidateRect(hwnd,nullptr,FALSE);return;}
-    if(key==VK_F7){app.settings->stageMode=(app.settings->stageMode+1)%stage::count;InvalidateRect(hwnd,nullptr,FALSE);return;}
-    if(key==VK_F9) {
-        app.settings->layoutMode=(app.settings->layoutMode+1)%layout::Count;
-        fieldGrid=false;
-        InvalidateRect(hwnd,nullptr,FALSE);
-        return;
-    }
+    if (HandleGlobalShortcut(hwnd, key)) return;
     if(key==VK_TAB && page==Page::Tracks && (app.settings->layoutMode==layout::Field ||
                        app.settings->layoutMode==layout::Cross)) {
         fieldGrid=!fieldGrid;
         InvalidateRect(hwnd,nullptr,FALSE);
         return;
     }
-    if(key==VK_F6) {toggleIntegerScale(hwnd);return;}
-    if(key>=VK_F1 && key<=VK_F3) {selectPage(hwnd,Page(key-VK_F1));return;}
     if(page==Page::System) {
         switch(key) {
             case VK_UP: settingRow=(settingRow+config_panel::kSettingCount-1)%config_panel::kSettingCount;return;
@@ -1089,6 +1117,34 @@ void popup(HWND hwnd,LPARAM coords) {
         tr(L"SYS   Settings\tF3",L"SYS   设置\tF3",L"SYS   設定\tF3")};
     for(int i=0;i<3;++i)AppendMenuW(m,MF_STRING|(i==int(page)?MF_CHECKED:0),10+i,name[i]);
     AppendMenuW(m,MF_SEPARATOR,0,nullptr);
+
+    PlayerApp& app = g_app;
+    const bool localActive = app.current == kTrackCount && !app.loading;
+    const bool audible = app.current >= 0 && app.audio.isPlaying();
+    const bool gameAudible = audible && app.current >= 0 && app.current < kTrackCount;
+    const wchar_t* playLabel = localActive
+        ? (app.audio.isPaused() ? tr(L"Resume\tSpace", L"继续播放\tSpace", L"再生\tSpace")
+                                : tr(L"Pause\tSpace", L"暂停\tSpace", L"一時停止\tSpace"))
+        : gameAudible
+        ? tr(L"Stop selected\tSpace", L"停止选中项\tSpace", L"選択項目を停止\tSpace")
+        : tr(L"Play selected\tSpace", L"播放选中项\tSpace", L"選択項目を再生\tSpace");
+    HMENU playback=CreatePopupMenu();
+    if(playback){
+        AppendMenuW(playback,MF_STRING,kPlayPauseCommand,playLabel);
+        AppendMenuW(playback,MF_STRING|(app.current>=0?0:MF_GRAYED),
+                    kStopCommand,tr(L"Stop\tS",L"停止\tS",L"停止\tS"));
+        AppendMenuW(playback,MF_SEPARATOR,0,nullptr);
+        const UINT playlistFlags=MF_STRING|(app.playlist.empty()?MF_GRAYED:0);
+        AppendMenuW(playback,playlistFlags,kPreviousCommand,tr(L"Previous local\tP",L"上一首本地曲目\tP",L"前のローカル曲\tP"));
+        AppendMenuW(playback,playlistFlags,kNextCommand,tr(L"Next local\tN",L"下一首本地曲目\tN",L"次のローカル曲\tN"));
+        const UINT seekFlags=MF_STRING|(localActive&&audible?0:MF_GRAYED);
+        AppendMenuW(playback,seekFlags,kSeekBackCommand,tr(L"Back 5 seconds\tLeft",L"后退 5 秒\t左",L"5 秒戻る\t左"));
+        AppendMenuW(playback,seekFlags,kSeekForwardCommand,tr(L"Forward 5 seconds\tRight",L"前进 5 秒\t右",L"5 秒進む\t右"));
+        AppendMenuW(m,MF_POPUP,(UINT_PTR)playback,tr(L"Playback",L"播放控制",L"再生操作"));
+    }
+    AppendMenuW(m,MF_STRING,kOpenFilesCommand,tr(L"Open files...\tCtrl+O",L"打开文件…\tCtrl+O",L"ファイルを開く…\tCtrl+O"));
+    AppendMenuW(m,MF_SEPARATOR,0,nullptr);
+
     AppendMenuW(m,MF_STRING|(g_app.settings->scaleMode?MF_CHECKED:0),
                  kIntegerScaleCommand,
                  tr(L"Integer scaling\tF6",L"整数倍缩放\tF6",L"整数倍拡大\tF6"));
@@ -1109,6 +1165,21 @@ void popup(HWND hwnd,LPARAM coords) {
                         50+i,layout::name(i,lib::language()));
         AppendMenuW(m,MF_POPUP,(UINT_PTR)comps,tr(L"Composition   F9",L"画面布局   F9",L"画面構成   F9"));
     }
+    HMENU themes=CreatePopupMenu();
+    if(themes){
+        for(int i=0;i<kThemeCount;++i){
+            wchar_t themeLabel[32];
+            swprintf(themeLabel,32,L"%hs",kThemes[i].name);
+            AppendMenuW(themes,MF_STRING|(g_themeIdx==i?MF_CHECKED:0),kThemeCommand+i,themeLabel);
+        }
+        AppendMenuW(m,MF_POPUP,(UINT_PTR)themes,tr(L"Theme   C / T",L"配色主题   C / T",L"配色テーマ   C / T"));
+    }
+    HMENU volume=CreatePopupMenu();
+    if(volume){
+        AppendMenuW(volume,MF_STRING,kVolumeDownCommand,tr(L"Volume -5\t-",L"音量 -5\t-",L"音量 -5\t-"));
+        AppendMenuW(volume,MF_STRING,kVolumeUpCommand,tr(L"Volume +5\t+",L"音量 +5\t+",L"音量 +5\t+"));
+        AppendMenuW(m,MF_POPUP,(UINT_PTR)volume,tr(L"Volume",L"音量",L"音量"));
+    }
     if(page==Page::Library) {
         AppendMenuW(m,MF_SEPARATOR,0,nullptr);
         AppendMenuW(m,MF_STRING,1,tr(L"Import folder...",L"导入文件夹…",L"フォルダーを追加…"));
@@ -1118,10 +1189,33 @@ void popup(HWND hwnd,LPARAM coords) {
         AppendMenuW(m,flags,4,tr(L"Move later",L"向后移动",L"後ろに移動"));
         AppendMenuW(m,flags,5,tr(L"Sort by filename",L"按文件名排序",L"ファイル名順"));
     }
+    AppendMenuW(m,MF_SEPARATOR,0,nullptr);
+    AppendMenuW(m,MF_STRING,kExitCommand,tr(L"Exit\tCtrl+Q",L"退出\tCtrl+Q",L"終了\tCtrl+Q"));
     int cmd=TrackPopupMenu(m,TPM_RETURNCMD|TPM_RIGHTBUTTON,pt.x,pt.y,0,hwnd,nullptr);
     DestroyMenu(m);
     if(cmd>=10 && cmd<=12)selectPage(hwnd,Page(cmd-10));
     else if(cmd==int(kIntegerScaleCommand))toggleIntegerScale(hwnd);
+    else if(cmd==int(kPlayPauseCommand)){
+        if(app.current==kTrackCount)app.audio.togglePause();
+        else if(app.current>=0&&app.audio.isPlaying())StopPlayback();
+        else if(page==Page::Library)playCursor();
+        else StartTrack(app.selected);
+        InvalidateRect(hwnd,nullptr,FALSE);
+    }
+    else if(cmd==int(kStopCommand))StopPlayback();
+    else if(cmd==int(kPreviousCommand))StepLocal(-1);
+    else if(cmd==int(kNextCommand))StepLocal(+1);
+    else if(cmd==int(kSeekBackCommand))app.audio.seek(app.audio.positionSeconds()-5.0);
+    else if(cmd==int(kSeekForwardCommand))app.audio.seek(app.audio.positionSeconds()+5.0);
+    else if(cmd==int(kOpenFilesCommand))ChooseMusic(hwnd);
+    else if(cmd>=int(kThemeCommand)&&cmd<int(kThemeCommand)+kThemeCount){
+        g_themeIdx=app.settings->theme=cmd-int(kThemeCommand);
+        RefreshTitle();
+        InvalidateRect(hwnd,nullptr,FALSE);
+    }
+    else if(cmd==int(kVolumeDownCommand))SetVolume(app.settings->volume-5);
+    else if(cmd==int(kVolumeUpCommand))SetVolume(app.settings->volume+5);
+    else if(cmd==int(kExitCommand))PostMessageA(hwnd,WM_CLOSE,0,0);
     else if(cmd>=40 && cmd<40+stage::wingCount){g_app.settings->wingMode=cmd-40;InvalidateRect(hwnd,nullptr,FALSE);}
     else if(cmd>=30 && cmd<30+stage::count){g_app.settings->stageMode=cmd-30;InvalidateRect(hwnd,nullptr,FALSE);}
     else if(cmd>=50 && cmd<50+layout::Count){g_app.settings->layoutMode=cmd-50;fieldGrid=false;InvalidateRect(hwnd,nullptr,FALSE);}
@@ -1319,11 +1413,13 @@ int RunPlayerWindow(Resolver& resolver, PlayerSettings& settings, std::string& e
     while (GetMessageW(&msg, 0, 0, 0) > 0) {
         if(msg.hwnd==searchEdit && msg.message==WM_KEYDOWN) {
             noteRailActivity();
-            if(msg.wParam>=VK_F1 && msg.wParam<=VK_F3) {selectPage(hwnd,Page(msg.wParam-VK_F1));continue;}
+            if(HandleGlobalShortcut(hwnd,msg.wParam)) continue;
             if(msg.wParam==VK_ESCAPE || msg.wParam==VK_RETURN || msg.wParam==VK_DOWN) {
                 focusSearch(false); continue;
             }
             if(msg.wParam=='L' && GetKeyState(VK_CONTROL)<0) {OpenLibrary(hwnd);continue;}
+            if(msg.wParam=='O' && GetKeyState(VK_CONTROL)<0) {ChooseMusic(hwnd);continue;}
+            if(msg.wParam=='Q' && GetKeyState(VK_CONTROL)<0) {PostMessageA(hwnd,WM_CLOSE,0,0);continue;}
         }
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
