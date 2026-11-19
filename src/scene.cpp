@@ -1367,9 +1367,9 @@ void PaintDiveLayout() {
     // painter's order: far (small, transparent) first, near (large, solid)
     for (int k = 0; k < K; ++k) {
         const Frame& F = fr[k];
-        // drop a layer only when even its innermost geometry (the # edges
-        // nearest the centre) is past the screen corner: it has fully
-        // expanded beyond the frame by then, never "hits" the screen
+        // a layer's own octagon / # / helix is culled once fully off-screen;
+        // the inter-layer waveform rails (drawn above, no cull) keep tracing
+        // to the screen edge so the scope line never breaks.
         if (F.half * 0.55f > 430.f) continue;
         const float depth = F.u;
         // depth cue: far/small layers nearly dissolve into the backdrop
