@@ -1350,70 +1350,72 @@ void PaintHelixLayout() {
     PaintCustomFooter(false);
 }
 
-// ---- composition: DIVE, first-person fall through a # / DNA tunnel --------
-// Each layer is a # frame whose four edges are DNA double helices: two
-// strands wind around each edge line with cross rungs between them. The
-// frame grows at a strictly uniform rate while the whole layer rotates; the
-// helix swing width is that moment's spectrum/waveform. Four bright marker
-// dots ride the edge midpoints so the plane reads in 3D. Frames are born
-// small at the centre, pass the viewer and leave past the screen edge.
+// ---- composition: DIVE, first-person fall through a spectrum light-gate --
+// Exponential-equal perspective (half = 14 * 28^u) spreads K=5 layers evenly
+// across 14..392px so the mid-field is always full. Each layer is a solid #
+// truss (4-point polygon bars, gauge follows the frozen birth drive) inside
+// a regular octagon whose 8 edges grow 40 inward spectrum teeth driven by
+// the LIVE bands. Star beacons stay pixel-native; every device-pixel offset
+// is S()-scaled so 1x and 2x read identically. Standby freezes the tunnel.
 void PaintDiveLayout() {
     const Theme& t = Th();
     const float kPi = 3.14159265f;
     FillRectCol(0, 0, S(kLogicalW), S(kLogicalH), t.outer);
+    // the tunnel lives on a recessed panel between the chassis bars, so
+    // DepthInk's fade target (panel) IS the actual backdrop
+    InsetPanel(0, 28, kLogicalW, 452);
+    gfx_push_clip(S(1), S(29), S(kLogicalW - 1), S(451));
 
     const bool active = g_state->current >= 0 && !g_state->libPaused;
-    const int cx = 320, cy = 236;
-    const int K = 4;                       // layers in flight: clean centre
+    const int cx = 320, cy = 240;
+    const int K = 5;                       // layers in flight: full mid-field
     const int DS = stage::Memory::kDiveSlots;
 
     // fall phase: strictly uniform on the standby-aware dive clock - one
-    // layer born every 1/0.32 s. Growth is true perspective (below), so a
-    // layer is far off-screen before its slot recycles. Standby freezes the
-    // whole tunnel; only the beacons keep a slow 3 s breathing cycle.
+    // layer born every 1/0.32 s. Standby freezes the whole tunnel; only the
+    // beacons keep a slow 3 s breathing cycle.
     const double f = g_mem ? g_mem->diveClock : 0.35;
     const int base = int(std::floor(f));
     const float frac = float(f - base);
 
-    // birth snapshots: frozen drive / phase per layer, indexed by birth
-    // number - never scrolls with the 8 Hz history, never ages out.
+    // birth snapshot: frozen drive per layer, indexed by birth number
     auto snapDrive = [&](int age) -> float {
         if (!g_mem || age < 0) return 0.f;
         return g_mem->diveDrive[((age % DS) + DS) % DS];
     };
 
-
     struct Frame { float half; float ang; float u; int age; float drive; float spark; };
     // K visible slots + 1 extra "just-recycled" anchor so the rail between
     // the outermost visible layer and the one that just left stays drawn.
-    Frame fr[5];
-    const float rot = float(f / 0.32) * 0.28f;   // uniform 0.28 rad/s, frozen in standby
+    Frame fr[6];
+    const float rot = float(f / 0.32) * 0.24f;   // uniform 0.24 rad/s, frozen in standby
     for (int k = 0; k <= K; ++k) {
         const float u = (k + frac) / K;              // 0 new/far .. >1 left
         const int age = base - k;
         fr[k].u = u;
         fr[k].age = age;
-        // true perspective: size ~ 1/z. The extra anchor (u>1) keeps growing
-        // past the frame so its rail endpoint is far off-screen, not snapped.
-        const float z = std::max(0.008f, 1.f - u);
-        fr[k].half = std::min(6000.f, 13.f / z);
+        // exponential-equal spacing: 14 -> 27 -> 53 -> 104 -> 203 -> 392px,
+        // every octave of depth gets one layer (no mid-field hole)
+        fr[k].half = std::min(2200.f, 14.f * std::pow(28.f, u));
         fr[k].drive = std::clamp(snapDrive(age), 0.f, 1.f);
         fr[k].spark = g_mem && age >= 0 ? g_mem->diveSpark[((age % DS) + DS) % DS] : 0.f;
-        fr[k].ang = age * 0.12f + rot;               // slight spiral, not a wring
+        fr[k].ang = age * 0.10f + rot;               // slight spiral, not a wring
     }
 
+    const float imp = Impact();
+    // nearest visible layer index (largest half still on screen)
+    int nearK = -1;
+    for (int k = 0; k < K; ++k)
+        if (fr[k].half * 0.55f <= 430.f) nearK = k;
+
     // tunnel-wall rails: connect each layer's 8 vertices to the next layer's
-    // corresponding vertex. Odd vertices carry the L waveform, even the R,
-    // displaced perpendicular to the rail - the walls are live scopes.
+    // corresponding vertex. Odd vertices carry the L waveform, even the R -
+    // secondary depth guides, kept slim so the light-gates stay the heroes.
     for (int k = 0; k + 1 <= K; ++k) {
         const Frame& A = fr[k];      // farther
         const Frame& B = fr[k + 1];  // nearer (may be the recycled anchor)
-        // No cull: the rail to the just-recycled layer keeps tracing to the
-        // screen edge until that anchor itself is gone, so the scope line
-        // between the last two layers never breaks.
         const float depth = std::min(1.f, A.u);
-        const float fade = std::min(0.96f, std::pow(1.f - depth, 1.6f));
-        const COLORREF railC = DepthInk(t.frame, fade);
+        const float fade = std::pow(1.f - depth, 1.35f);
         for (int c = 0; c < 8; ++c) {
             const float aa = kPi / 8.f + c * kPi / 4.f;
             const float ax = A.half * cosf(aa + A.ang), ay = A.half * sinf(aa + A.ang);
@@ -1430,7 +1432,7 @@ void PaintDiveLayout() {
             for (int i = 0; i <= RS; ++i) {
                 const float tt = float(i) / RS;
                 const float v = std::clamp(wv[(i * 14) % 240] / 64.f, -1.f, 1.f);
-                const float disp = v * std::min(22.f, len * 0.14f);
+                const float disp = v * std::min(18.f, len * 0.12f);
                 rail[i] = { (std::int16_t)S(cx + int(ax + dx * tt + nx * disp)),
                             (std::int16_t)S(cy + int(ay + dy * tt + ny * disp)) };
             }
@@ -1441,23 +1443,16 @@ void PaintDiveLayout() {
     // painter's order: far (small, transparent) first, near (large, solid)
     for (int k = 0; k < K; ++k) {
         const Frame& F = fr[k];
-        // a layer's own octagon / # / helix is culled once fully off-screen;
-        // the inter-layer waveform rails (drawn above, no cull) keep tracing
-        // to the screen edge so the scope line never breaks.
+        // a layer's own geometry is culled once fully off-screen; the rails
+        // above keep tracing to the screen edge so the scope never breaks.
         if (F.half * 0.55f > 430.f) continue;
-        const float depth = F.u;
-        // depth cue: far/small layers nearly dissolve into the backdrop
-        // (power curve), near layers solid - monotonic, no reversal
-        const float fade = std::min(0.96f, std::pow(1.f - depth, 1.6f));
+        // depth cue: far layers dissolve into the panel, near layers solid
+        const float fade = std::pow(1.f - std::clamp(F.u, 0.f, 1.f), 1.35f);
         const float ca = cosf(F.ang), sa = sinf(F.ang);
         auto pt = [&](float lx, float ly) -> GfxPoint {
             return { (std::int16_t)S(cx + int(lx * ca - ly * sa)),
                      (std::int16_t)S(cy + int(lx * sa + ly * ca)) };
         };
-        // the positioning frame is a REGULAR octagon of 8 hard beacon lights
-        // at radius half. The # is four INFINITE lines clipped by that
-        // octagon: each edge runs along its line until it hits the boundary,
-        // and the DNA helix winds uniformly over that whole visible span.
         float ovx[8], ovy[8];
         GfxPoint oct[8];
         for (int c = 0; c < 8; ++c) {
@@ -1466,10 +1461,14 @@ void PaintDiveLayout() {
             ovy[c] = F.half * sinf(a);
             oct[c] = pt(ovx[c], ovy[c]);
         }
-        // faint octagon rim: the clipping boundary
+        // octagon rim: 1px normally; the nearest layer's rim steps to 3px
+        // accentHot on a beat (low band drives the big skeleton)
+        const bool rimHot = imp > 0.08f && k == nearK;
+        const int rimW = rimHot ? S(3) : S(1);
+        const COLORREF rimC = rimHot ? t.accentHot : DepthInk(t.frame, 0.45f + fade * 0.4f);
         for (int c = 0; c < 8; ++c) {
             GfxPoint rim[2] = { oct[c], oct[(c + 1) % 8] };
-            gfx_polyline(rim, 2, DepthInk(t.frame, 0.45f + fade * 0.4f), 1);
+            gfx_polyline(rim, 2, rimC, rimW);
         }
         // clip the infinite line P + t*D against the convex octagon by
         // intersecting it with every rim segment (robust, winding-agnostic)
@@ -1481,7 +1480,6 @@ void PaintDiveLayout() {
                 const int n = (c + 1) % 8;
                 const float ax = ovx[c], ay = ovy[c];
                 const float ex = ovx[n] - ax, ey = ovy[n] - ay;
-                // solve P + t*D = A + s*E
                 const float den = dx * ey - dy * ex;
                 if (std::abs(den) < 1e-6f) continue;       // parallel
                 const float tt = ((ax - px) * ey - (ay - py) * ex) / den;
@@ -1492,16 +1490,15 @@ void PaintDiveLayout() {
             }
             return hit && t0 < t1;
         };
-        // # truss: four infinite lines clipped by the octagon, each drawn as
-        // a twin parallel rail whose gauge opens with the layer's frozen
-        // birth drive (1px at rest .. half*0.06 at full energy). No helix.
+        // solid # truss: four clipped infinite lines drawn as filled 4-point
+        // bars; the gauge opens with the layer's frozen birth drive
         const float off = F.half * 0.42f;      // # bar offset: big centre hole
-        const float gauge = std::max(1.f, F.half * 0.06f * F.drive);
+        const float hw = std::max(1.f, F.half * (0.012f + 0.032f * F.drive));
         const COLORREF trussC = DepthInk(t.wave, fade);
-        const COLORREF trussD = DepthInk(LerpCol(t.wave, t.bar, 0.45f), fade);
+        const COLORREF ridgeC = DepthInk(t.bar, fade);
         const COLORREF lockC = DepthInk(LerpCol(t.accentHot, t.ink, 0.25f), fade);
         const bool hotLayer = F.drive > 0.45f || F.spark > 0.25f;
-        const int lockR = std::max(2, int(F.half * 0.03f));
+        const int lockR = S(std::max(2, int(F.half * 0.03f)));
         for (int e = 0; e < 4; ++e) {
             const bool horiz = e < 2;
             const float eo = (e % 2) ? off : -off;
@@ -1509,11 +1506,16 @@ void PaintDiveLayout() {
             const float dx = horiz ? 1.f : 0.f, dy = horiz ? 0.f : 1.f;
             float t0, t1;
             if (!clipLine(px, py, dx, dy, t0, t1)) continue;
-            for (int rail = 0; rail < 2; ++rail) {
-                const float q = rail ? gauge * 0.5f : -gauge * 0.5f;
-                GfxPoint seg[2] = { horiz ? pt(t0, eo + q) : pt(eo + q, t0),
-                                    horiz ? pt(t1, eo + q) : pt(eo + q, t1) };
-                gfx_polyline(seg, 2, rail ? trussD : trussC, 1);
+            GfxPoint bar[4] = { horiz ? pt(t0, eo - hw) : pt(eo - hw, t0),
+                                horiz ? pt(t1, eo - hw) : pt(eo - hw, t1),
+                                horiz ? pt(t1, eo + hw) : pt(eo + hw, t1),
+                                horiz ? pt(t0, eo + hw) : pt(eo + hw, t0) };
+            gfx_polygon(bar, 4, trussC);
+            // 1px highlight ridge along the bar centre on the near layers
+            if (F.u > 0.45f) {
+                GfxPoint ridge[2] = { horiz ? pt(t0, eo) : pt(eo, t0),
+                                      horiz ? pt(t1, eo) : pt(eo, t1) };
+                gfx_polyline(ridge, 2, ridgeC, S(1));
             }
         }
         // lock blocks at the four # crossings on high-energy layers
@@ -1524,9 +1526,49 @@ void PaintDiveLayout() {
                     FillRectCol(p.x - lockR, p.y - lockR, p.x + lockR + 1, p.y + lockR + 1, lockC);
                 }
         }
-        // pixel-native star beacons: hard core + extending orthogonal cross
-        // rays + a thin diamond frame at the flash peak. Zero soft edges, no
-        // square body at any phase; standby slows the breathing to 3 s.
+        // spectrum light-gate: 8 edges x 5 segments = 40 live bands growing
+        // inward as solid trapezoid teeth (mid/near layers only, so the
+        // centre never turns into mush)
+        if (F.half >= 36.f) {
+            const COLORREF toothC = DepthInk(t.bar, fade);
+            const COLORREF tailC = DepthInk(t.barLit, fade);
+            for (int c = 0; c < 8; ++c) {
+                const int n = (c + 1) % 8;
+                const float ex = ovx[n] - ovx[c], ey = ovy[n] - ovy[c];
+                const float el = std::sqrt(ex * ex + ey * ey);
+                if (el < 4.f) continue;
+                const float ux = ex / el, uy = ey / el;
+                // inward normal (toward the centre)
+                float nx = -uy, ny = ux;
+                const float mx = (ovx[c] + ovx[n]) * 0.5f, my = (ovy[c] + ovy[n]) * 0.5f;
+                if (mx * nx + my * ny > 0.f) { nx = -nx; ny = -ny; }
+                for (int m = 0; m < 5; ++m) {
+                    const int band = c * 5 + m;
+                    const float lv = Lv(band);
+                    const float pv = stage::bandLevel(g_state->spectrum.barsPrev[band]);
+                    const float d = F.half * 0.22f * lv;
+                    const float pd = F.half * 0.22f * pv;
+                    const float s0 = (m + 0.12f) / 5.f, s1 = (m + 0.88f) / 5.f;
+                    const float ax = ovx[c] + ex * s0, ay = ovy[c] + ey * s0;
+                    const float bx = ovx[c] + ex * s1, by = ovy[c] + ey * s1;
+                    if (pd > d + 1.f) {
+                        GfxPoint tail[4] = { pt(ax + nx * d, ay + ny * d),
+                                             pt(bx + nx * d, by + ny * d),
+                                             pt(bx + nx * pd, by + ny * pd),
+                                             pt(ax + nx * pd, ay + ny * pd) };
+                        gfx_polygon(tail, 4, tailC);
+                    }
+                    if (d >= 1.f) {
+                        GfxPoint tooth[4] = { pt(ax, ay), pt(bx, by),
+                                              pt(bx + nx * d, by + ny * d),
+                                              pt(ax + nx * d, ay + ny * d) };
+                        gfx_polygon(tooth, 4, toothC);
+                    }
+                }
+            }
+        }
+        // pixel-native star beacons: hard core + orthogonal cross rays + a
+        // thin diamond at the flash peak. All offsets S()-scaled (2x-safe).
         {
             const float period = active ? 1.8f : 3.0f;
             const float phase = float(g_state->tick) / 60.f * 2.f * kPi / period + k * 1.3f;
@@ -1537,25 +1579,23 @@ void PaintDiveLayout() {
             const COLORREF coreC = pulse > 0.5f
                 ? DepthInk(LerpCol(t.accentHot, t.ink, 0.35f), fade)
                 : DepthInk(t.accentHot, fade);
-            const int len = int(2 + 12 * pulse * (0.4f + 0.6f * std::min(1.f, F.u)));
+            const int len = S(int(2 + 12 * pulse * (0.4f + 0.6f * std::min(1.f, F.u))));
+            const int core = pulse > 0.5f ? S(2) : S(1);
+            const int rayW = S(1);
             for (int c = 0; c < 8; ++c) {
                 const int bx = oct[c].x, by = oct[c].y;
-                // orthogonal 1px star rays
-                FillRectCol(bx - len, by, bx + len + 1, by + 1, rayC);
-                FillRectCol(bx, by - len, bx + 1, by + len + 1, rayC);
-                // hard core: 3x3 at the peak, a crisp 1x1 point at the trough
-                if (pulse > 0.5f) FillRectCol(bx - 1, by - 1, bx + 2, by + 2, coreC);
-                else FillRectCol(bx, by, bx + 1, by + 1, coreC);
-                // peak diamond outline
+                FillRectCol(bx - len, by, bx + len + 1, by + rayW, rayC);
+                FillRectCol(bx, by - len, bx + rayW, by + len + 1, rayC);
+                FillRectCol(bx - core + rayW, by - core + rayW, bx + core + 1, by + core + 1, coreC);
                 if (pulse > 0.65f) {
-                    const int r = 3 + int(3 * pulse);
+                    const int r = S(3 + int(3 * pulse));
                     GfxPoint dia[5] = {
                         { (std::int16_t)bx, (std::int16_t)(by - r) },
                         { (std::int16_t)(bx + r), (std::int16_t)by },
                         { (std::int16_t)bx, (std::int16_t)(by + r) },
                         { (std::int16_t)(bx - r), (std::int16_t)by },
                         { (std::int16_t)bx, (std::int16_t)(by - r) } };
-                    gfx_polyline(dia, 5, rayC, 1);
+                    gfx_polyline(dia, 5, rayC, S(1));
                 }
             }
         }
@@ -1565,6 +1605,7 @@ void PaintDiveLayout() {
     FillRectCol(S(cx - 2), S(cy - 2), S(cx + 3), S(cy + 3), t.ink);
     FillRectCol(S(cx - 1), S(cy - 1), S(cx + 2), S(cy + 2), t.frame);
 
+    gfx_pop_clip();
     PaintCustomHeader("DIVE / 06");
     PaintCustomFooter(false);
 }

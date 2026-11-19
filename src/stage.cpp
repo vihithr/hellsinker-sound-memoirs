@@ -119,6 +119,11 @@ void Memory::advance(const memoirs::Spectrum& s,int id,double seconds,bool playi
     {
         const int b=int(std::floor(diveClock));
         if(b>diveLastBase){
+            if(diveLastBase<0){
+                // cold start (track switch / first play): pre-fill a base
+                // energy so the first layers are not flat-zero trusses
+                for(int i=0;i<kDiveSlots;i++)diveDrive[i]=0.25f;
+            }
             diveLastBase=b;
             const int slot=b%kDiveSlots;
             diveDrive[slot]=std::clamp((wing[0]+wing[1])*0.5f,0.f,1.f);
