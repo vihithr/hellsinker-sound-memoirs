@@ -1774,6 +1774,103 @@ void PaintSonoLayout() {
     PaintCustomFooter(false);
 }
 
+// ---- composition: TRACK, PC-98 / FastTracker II hex pattern scroll ---------
+// 43 bands aggregate into 8 acoustic channels. Top: 8 mini channel meters.
+// Bottom: a hex level pattern scrolling uniformly down at 12 rows/s with the
+// newest row locked in the 4th-row playhead slot - pure DOS tracker DNA.
+void PaintTrackLayout() {
+    const Theme& t = Th();
+    FillRectCol(0, 0, S(kLogicalW), S(kLogicalH), t.outer);
+    static const char* chName[8] = { "01:SUB", "02:BAS", "03:LOW", "04:MID",
+                                     "05:VOC", "06:HIM", "07:BRL", "08:AIR" };
+    static const int lo[8] = { 0, 3, 7, 12, 18, 24, 30, 37 };
+    static const int hi[8] = { 2, 6, 11, 17, 23, 29, 36, 42 };
+    auto chanLv = [&](int c) -> float {
+        float m = 0.f;
+        for (int k = lo[c]; k <= hi[c]; ++k) m = std::max(m, Lv(k));
+        return m;
+    };
+    const int colX = 56, colW = 70;
+
+    // ---- channel meter head ------------------------------------------------
+    InsetPanel(16, 34, 624, 126);
+    DrawCells("ROW", 22, 42, 2);
+    const COLORREF ghost = LerpCol(t.panel, t.seam, 0.45f);
+    for (int c = 0; c < 8; ++c) {
+        const int x = colX + c * colW;
+        if (c > 0) FillRectCol(S(x - 1), S(38), S(x), S(122), t.seam);
+        DrawCells(chName[c], x + 4, 40, 2);
+        const float lv = chanLv(c);
+        if (lv * 255.f > 180.f)
+            FillRectCol(S(x + 60), S(42), S(x + 64), S(46), t.accentHot);
+        // 56px vertical segmented meter with VFD ghost
+        const int bx = x + 26, bw = 18, baseY = 120, maxH = 56;
+        const int up = int(lv * maxH);
+        for (int y = baseY - maxH; y < baseY - up; y += 3)
+            FillRectCol(S(bx), S(y), S(bx + bw), S(std::min(y + 2, baseY)), ghost);
+        for (int y = baseY - up; y < baseY; y += 3)
+            FillRectCol(S(bx), S(y), S(bx + bw), S(std::min(y + 2, baseY)),
+                        y < baseY - maxH + 12 ? t.barLit : t.bar);
+    }
+
+    // ---- hex pattern scroll -------------------------------------------------
+    InsetPanel(16, 132, 624, 446);
+    const int topY = 136, rowH = 12, headSlot = 3;
+    const int playY = topY + headSlot * rowH;
+    const double clock = g_mem ? g_mem->trackClock : 0.0;
+    const int frac = int((clock - std::floor(clock)) * rowH);
+    const int current = g_mem ? (g_mem->trackRowCounter - 1) & 0xFF : 0;
+    const int H = stage::Memory::kTrackRows;
+    const char* hexd = "0123456789ABCDEF";
+    gfx_push_clip(S(18), S(134), S(622), S(444));
+    for (int slot = 0; slot < 25; ++slot) {
+        const int age = slot - headSlot;
+        // newest row pinned at the playhead; everything else slides down
+        const int y = age == 0 ? playY : playY + age * rowH + frac;
+        if (y + rowH < 134 || y > 444) continue;
+        const int rowNum = (current - age) & 0xFF;
+        const bool hasData = g_mem && age >= 0 && age < H;
+        const int idx = hasData ? (g_mem->trackHead - 1 - age + H * 4) % H : 0;
+        const bool beatRow = hasData && g_mem->trackBeat[idx];
+        if (beatRow) {
+            FillRectCol(S(18), S(y), S(622), S(y + rowH), LerpCol(t.panel, t.seam, 0.55f));
+            FillRectCol(S(18), S(y), S(21), S(y + rowH), t.accentHot);
+        }
+        // row number: every 4th row highlighted like a tracker beat line
+        char rb[4] = { hexd[rowNum >> 4], hexd[rowNum & 15], 0, 0 };
+        DrawCells(rb, 26, y + 1, rowNum % 4 == 0 ? 3 : 2);
+        for (int c = 0; c < 8; ++c) {
+            const int x = colX + c * colW;
+            const int v = hasData ? g_mem->trackHex[idx][c] : 0;
+            char vb[4];
+            if (v == 0) { vb[0] = '-'; vb[1] = '-'; }
+            else { vb[0] = hexd[v >> 4]; vb[1] = hexd[v & 15]; }
+            vb[2] = 0;
+            DrawCells(vb, x + 4, y + 1,
+                      v == 0 ? 2 : v >= 0xC0 ? 0 : 3);
+            if (v >= 0xC0) {
+                // hot values repaint in the accent colour over the atlas
+                FillRectCol(S(x + 2), S(y + 2), S(x + 3), S(y + 10), t.accentHot);
+            }
+            // 34px hard-edge energy bar beside the hex value
+            const int bx = x + 24, bw = 34;
+            FillRectCol(S(bx), S(y + 4), S(bx + bw), S(y + 8), ghost);
+            const int w = int(v / 255.f * bw);
+            if (w > 0) FillRectCol(S(bx), S(y + 4), S(bx + w), S(y + 8), t.bar);
+            const int pw = hasData && age + 1 < H
+                ? int(g_mem->trackHex[(g_mem->trackHead - 2 - age + H * 4) % H][c] / 255.f * bw) : 0;
+            if (pw > w) FillRectCol(S(bx + w), S(y + 4), S(bx + pw), S(y + 8), t.barLit);
+        }
+    }
+    gfx_pop_clip();
+    // playhead slot: two 1px frame rules bracket the newest row
+    FillRectCol(S(18), S(playY - 1), S(622), S(playY), t.frame);
+    FillRectCol(S(18), S(playY + rowH), S(622), S(playY + rowH + 1), t.frame);
+
+    PaintCustomHeader("TRACK / 08");
+    PaintCustomFooter(false);
+}
+
 // ---- channel rail ---------------------------------------------------------
 // The page rail stays visible while the user is around and fades out after
 // 150 idle frames. While fading the pre-rail background is blended back
@@ -2009,6 +2106,7 @@ void sceneRender(const SceneState& s, float scale, const stage::Memory& memory,
         if (layoutMode == layout::Helix) { PaintHelixLayout(); return; }
         if (layoutMode == layout::Dive) { PaintDiveLayout(); return; }
         if (layoutMode == layout::Sono) { PaintSonoLayout(); return; }
+        if (layoutMode == layout::Track) { PaintTrackLayout(); return; }
     }
 
     const int mode = s.stageMode;

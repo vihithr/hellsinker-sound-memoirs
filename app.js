@@ -140,7 +140,7 @@ const localFiles=new Map();  // norm(name) -> File, for browser-native decoding
 const fileKey=s=>s.toLowerCase().replaceAll("/","\\");
 let scrubbing=false,scrubFraction=0,next=0,fatal=null,ready=false,lastError="";
 const THEMES=["ORIGINAL","DARK","NEON","PAPER","BLUEPRINT"];
-const LAYOUTS=["ORIGINAL","FIELD","STACK","RING","CROSS","SINK","DIVE","SONO"];
+const LAYOUTS=["ORIGINAL","FIELD","STACK","RING","CROSS","SINK","DIVE","SONO","TRACK"];
 const ORDERS=["ORDER","ONE","LOOP","SHUFFLE"];
 const pending=new Map(),worker=new Worker("./worker.js",{type:"module"});
 
@@ -357,7 +357,7 @@ function hitLayout(x,y){
 }
 // Progress rails of the custom layouts: [x0,x1,y0,y1] hit bands.
 // All six custom layouts share the chassis footer rail (y 454..457).
-const LAYOUT_SEEK={1:[16,624,448,462],2:[16,624,448,462],3:[16,624,448,462],4:[16,624,448,462],5:[16,624,448,462],6:[16,624,448,462],7:[16,624,448,462]};
+const LAYOUT_SEEK={1:[16,624,448,462],2:[16,624,448,462],3:[16,624,448,462],4:[16,624,448,462],5:[16,624,448,462],6:[16,624,448,462],7:[16,624,448,462],8:[16,624,448,462]};
 function seekLayout(f){
   if(!buffer)return;
   offset=Math.max(0,Math.min(1,f))*buffer.duration;
