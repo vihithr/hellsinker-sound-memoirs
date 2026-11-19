@@ -104,8 +104,12 @@ void Memory::advance(const memoirs::Spectrum& s,int id,double seconds,bool playi
     lastHigh=high;
     wing[0]=follow(wing[0],channelDrive(s.envL,s.waveL),dt,.030,.30);
     wing[1]=follow(wing[1],channelDrive(s.envR,s.waveR),dt,.030,.30);
-    meter[0]=follow(meter[0],calibratedMeter(s.envL,s.waveL),dt,.025,.26);
-    meter[1]=follow(meter[1],calibratedMeter(s.envR,s.waveR),dt,.025,.26);
+    const float input[2] = {calibratedMeter(s.envL,s.waveL), calibratedMeter(s.envR,s.waveR)};
+    for (int side = 0; side < 2; ++side) {
+        const float onset = std::clamp(4.f * (input[side] - meter[side]), 0.f, 1.f);
+        coilAttack[side] = follow(coilAttack[side], onset, dt, .012, .21);
+        meter[side] = follow(meter[side], input[side], dt, .025, .26);
+    }
 
     // XY auto-gain: follow the live trace peak, attack 120 ms / release 1.6 s.
     {

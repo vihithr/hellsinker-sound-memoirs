@@ -1432,22 +1432,27 @@ void PaintHelixLayout() {
         const float* history = side ? g_mem->histR : g_mem->histL;
         return history[slot] + (history[(slot + H - 1) % H] - history[slot]) * (pos - i);
     };
+    const float liveBalance = g_mem ? g_mem->meter[1]-g_mem->meter[0] : 0.f;
     struct CoilPoint { float x, y, z; };
     auto coil = [&](float y, int side, int strand) -> CoilPoint {
         const float age = float(y - wt) / pitch - float(phase);
         const double row = (y - wt) / double(pitch) - clock;
         const double orbit = row * .233 + side * 3.14159265;
         const double turn = row * (side ? .84 : .92) + side * 1.9 + strand * 3.14159265;
-        const float radius = 17.f + 21.f * levelAt(age, side);
+        const float left = levelAt(age, 0), right = levelAt(age, 1);
+        const float balance = .60f * liveBalance + .40f * (right-left);
+        const float width = 39.f + 52.f * std::clamp(1.8f * std::abs(balance),0.f,1.f);
+        const float radius = 16.f + 21.f * (side ? right : left);
+        const float drift = 9.f * balance;
         // An oblique projection exposes the return arc of each winding.
-        return {cx + float(65.*std::sin(orbit) + radius*std::sin(turn)),
+        return {cx + drift + float(width*std::sin(orbit) + radius*std::sin(turn)),
                 y + float(.32*radius*std::cos(turn) + 4.*std::cos(orbit)),
                 float(.70*std::cos(orbit) + .30*std::cos(turn))};
     };
     struct Stroke { CoilPoint a,b; int side; bool bond; };
     constexpr int step = 3, margin = 32, stepsPerBond = 4;
     constexpr int maxSteps = (kLogicalH + 2 * margin) / step + 2;
-    Stroke strokes[4 * maxSteps + 2 * (maxSteps / stepsPerBond + 1)];
+    Stroke strokes[4 * maxSteps + 4 * (maxSteps / stepsPerBond + 1)];
     int used = 0;
     // Anchor the rungs to the moving strands so the bonds descend with them.
     const float shift = float(std::fmod(clock * pitch, step * stepsPerBond));
@@ -1461,8 +1466,21 @@ void PaintHelixLayout() {
                 strokes[used++] = {prev[strand], end, side, false};
                 prev[strand] = end;
             }
-            if (j % stepsPerBond == 0)
-                strokes[used++] = {prev[0], prev[1], side, true};
+            if (j % stepsPerBond == 0) {
+                // Pin both ends. Deflect the midpoint across the projected
+                // rung; short, end-on rungs have correspondingly less travel.
+                const float dx = prev[1].x-prev[0].x, dy = prev[1].y-prev[0].y;
+                const float len = std::sqrt(dx*dx + dy*dy);
+                const float attack = g_mem ? g_mem->coilAttack[side] : 0.f;
+                const float amplitude = std::min(.29f*len, 16.f*attack);
+                const float swing = amplitude * float(std::sin(clock*6.1 + y*.031 + side*1.7))
+                                  / std::max(1.f,len);
+                const CoilPoint mid{.5f*(prev[0].x+prev[1].x)-dy*swing,
+                                    .5f*(prev[0].y+prev[1].y)+dx*swing,
+                                    .5f*(prev[0].z+prev[1].z)};
+                strokes[used++] = {prev[0], mid, side, true};
+                strokes[used++] = {mid, prev[1], side, true};
+            }
         }
     }
     std::sort(strokes, strokes + used, [](const Stroke& a, const Stroke& b) {
@@ -1471,8 +1489,9 @@ void PaintHelixLayout() {
     for (int i = 0; i < used; ++i) {
         const Stroke& v = strokes[i];
         const float light = std::clamp(.5f + .25f * (v.a.z + v.b.z), 0.f, 1.f);
-        const COLORREF pigment = v.side ? t.bar : LerpCol(t.wave,t.ink,.23f);
-        const float fade = v.bond ? .35f + .38f * (1.f-light) : .04f + .61f * (1.f-light);
+        const COLORREF backbone = v.side ? t.bar : LerpCol(t.wave,t.ink,.23f);
+        const COLORREF pigment = v.bond ? (LightTheme() ? t.digit : t.ink) : backbone;
+        const float fade = v.bond ? .17f + .43f * (1.f-light) : .04f + .61f * (1.f-light);
         const COLORREF ink = LerpCol(pigment, CustomPanelCol(), fade);
         GfxPoint seg[] = {ScenePoint(v.a.x,v.a.y),ScenePoint(v.b.x,v.b.y)};
         gfx_polyline(seg,2,ink,S(v.bond ? 1 : light>.58f ? 3 : 2));
@@ -1699,39 +1718,31 @@ void PaintDiveLayout() {
             GfxPoint rim[2] = { oct[c], oct[(c + 1) % 8] };
             gfx_polyline(rim, 2, rimC, rimW);
         }
-        // A continuous pleated band. Adjacent teeth share the same inner
-        // valley and the same outer anchor, including at octagon corners.
+        // Each frequency has a narrow meter perpendicular to the gate.
+        // Keep gaps readable at 1x; distant gates have fewer subdivisions.
         if (F.half >= 34.f) {
+            constexpr float reach = .215f;
+            const int steps = std::clamp(int(F.half * reach / 3.f), 2, 12);
+            const COLORREF body = DepthInk(t.bar, fade);
+            const COLORREF cap = DepthInk(LerpCol(t.bar, t.ink, .65f), fade);
             for (int c = 0; c < 8; ++c) {
-                const int next = (c + 1) % 8;
-                const float ex = ovx[next] - ovx[c], ey = ovy[next] - ovy[c];
-                const int first = c * 43 / 8, count = (c + 1) * 43 / 8 - first;
-                auto sidePoint = [&](float u, float inset) {
-                    return pt((ovx[c] + u * ex) * (1.f - inset),
-                              (ovy[c] + u * ey) * (1.f - inset));
-                };
-                for (int m = 0; m < count; ++m) {
-                    const int band = first + m;
-                    const float level = Lv(band);
-                    const float prev = Lv((band + 42) % 43), nextLevel = Lv((band + 1) % 43);
-                    const float u0 = float(m) / count, u1 = float(m + 1) / count;
-                    const float crest = (m + .60f) / count;
-                    constexpr float toothReach = .215f;
-                    const float peak = toothReach * level;
-                    const float held = toothReach * stage::bandLevel(g_state->spectrum.barsPrev[band]);
-                    const GfxPoint root = sidePoint(crest, 0.f);
-                    const GfxPoint tip = sidePoint(crest, peak);
-                    const GfxPoint left = sidePoint(u0, .044f * std::min(prev, level));
-                    const GfxPoint right = sidePoint(u1, .044f * std::min(level, nextLevel));
-                    if (held > peak + .008f) {
-                        GfxPoint tail[] = {left, sidePoint(crest, held), right};
-                        gfx_polygon(tail, 3, DepthInk(t.barLit, fade + .18f));
-                    }
-                    if (level < .005f) continue;
-                    GfxPoint rise[] = {sidePoint(u0, 0.f), left, tip, root};
-                    GfxPoint fall[] = {root, tip, right, sidePoint(u1, 0.f)};
-                    gfx_polygon(rise, 4, DepthInk(t.bar, fade));
-                    gfx_polygon(fall, 4, DepthInk(LerpCol(t.bar, t.panel, .46f), fade));
+                const int next = (c+1)%8;
+                const float ex = ovx[next]-ovx[c], ey = ovy[next]-ovy[c];
+                const int first = c*43/8, count = (c+1)*43/8-first;
+                for (int m=0; m<count; ++m) {
+                    const int band = first+m;
+                    const int lit = int(std::round(steps*Lv(band)));
+                    const int held = int(std::round(steps*stage::bandLevel(g_state->spectrum.barsPrev[band])));
+                    auto dash = [&](int row, COLORREF color) {
+                        const float scale = 1.f - reach * row / steps;
+                        const float u = (m+.5f)/count, halfWidth = .32f/count;
+                        GfxPoint line[] = {
+                            pt((ovx[c]+ex*(u-halfWidth))*scale,(ovy[c]+ey*(u-halfWidth))*scale),
+                            pt((ovx[c]+ex*(u+halfWidth))*scale,(ovy[c]+ey*(u+halfWidth))*scale)};
+                        gfx_polyline(line,2,color,S(1));
+                    };
+                    for(int row=1; row<=lit; ++row) dash(row, row==lit ? cap : body);
+                    if(held>lit) dash(held,cap);
                 }
             }
         }
