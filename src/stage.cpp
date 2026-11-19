@@ -51,6 +51,17 @@ void Memory::advance(const memoirs::Spectrum& s,int id,double seconds,bool playi
     wing[0]=follow(wing[0],channelDrive(s.envL,s.waveL),dt,.030,.30);
     wing[1]=follow(wing[1],channelDrive(s.envR,s.waveR),dt,.030,.30);
 
+    // XY auto-gain: follow the live trace peak, attack 120 ms / release 1.6 s.
+    {
+        float peak=1.f;
+        for(int i=0;i<120;i++){
+            peak=std::max(peak,std::abs(float(s.waveL[2*i]-s.waveR[2*i]))*.92f);
+            peak=std::max(peak,std::abs(float(s.waveL[2*i]+s.waveR[2*i]))*.72f);
+        }
+        const float target=std::clamp(56.f/peak,.5f,4.f);
+        xyGain=follow(xyGain,target,dt,.12,1.6);
+    }
+
     // Slow per-channel peak marks for the HELIX rack rails.
     const float drive[2]={channelDrive(s.envL,s.waveL),channelDrive(s.envR,s.waveR)};
     for(int c=0;c<2;c++){
@@ -155,13 +166,23 @@ void phase(Paper p,const Palette& c,const Memory& m){
     for(int j=-8;j<=8;j++)p.rule(x+j*19,y-70,x+j*19,y+70,c.grid);
     GfxPoint frame[]={{std::int16_t(x-76),std::int16_t(y)},{std::int16_t(x),std::int16_t(y-70)},{std::int16_t(x+76),std::int16_t(y)},{std::int16_t(x),std::int16_t(y+70)},{std::int16_t(x-76),std::int16_t(y)}};
     p.path(frame,5,c.frame);
-    long peak=0;for(const auto& layer:m.traces)for(const GfxPoint& v:layer)
-        peak=std::max(peak,std::max<long>(std::abs((long)v.x),std::abs((long)v.y)));
-    const double gain=std::min(4.,68./std::max(1L,peak));
-    for(int j=0;j<std::min(6,m.samples);j++){
-        const auto& trace=m.traces[(m.trace+7-std::min(6,m.samples)+j)%6];GfxPoint pts[120];
-        for(int k=0;k<120;k++)pts[k]={std::int16_t(x+int(trace[k].x*gain)),std::int16_t(y-int(trace[k].y*gain))};
-        p.path(pts,120,j==std::min(6,m.samples)-1?c.accent:mix(c.grid,c.line,.22+.12*j));
+    // Smoothed auto-gain (Memory::xyGain) instead of a per-frame hard
+    // normalisation: quiet stereo still opens up, and the figure breathes
+    // with the music rather than snapping scale on every transient.
+    const double gain=m.xyGain;
+    const int layers=std::min(4,m.samples);
+    for(int j=0;j<layers;j++){
+        const auto& trace=m.traces[(m.trace+7-layers+j)%6];GfxPoint pts[120];
+        for(int k=0;k<120;k++){
+            const int px=std::clamp(int(trace[k].x*gain),-72,72);
+            const int py=std::clamp(int(trace[k].y*gain),-64,64);
+            pts[k]={std::int16_t(x+px),std::int16_t(y-py)};
+        }
+        // clear age hierarchy: newest bright accent, older layers sink fast
+        const C col=j==layers-1?c.accent
+                   :j==layers-2?c.line
+                   :mix(c.grid,c.line,.10+.14*j);
+        p.path(pts,120,col);
     }
     p.fill(x-1,y-1,3,3,c.accent);
 }

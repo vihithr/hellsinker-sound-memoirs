@@ -76,6 +76,9 @@ static double PlayProgress() {
     return std::clamp(f, 0.0, 1.0);
 }
 
+// Beat impact 0..1 (fast attack / 240 ms release, from the low bands).
+static inline float Impact() { return g_mem ? g_mem->impact : 0.f; }
+
 // Transport word for the custom layouts' status corners.
 static const char* TransportWord() {
     if (g_state->loading) return "LOAD";
@@ -466,6 +469,11 @@ void PaintWings(int style) {
         int base = side ? 570 : 70;
         const float* wave = side ? g_state->spectrum.waveR : g_state->spectrum.waveL;
         if (style == 3) {
+            // edges heat toward stripHot with the channel envelope: quiet
+            // stays cool wave/bar, a strong passage visibly loads the ribbon
+            const float heat = std::clamp(g_state->wing[side], 0.f, 1.f);
+            const COLORREF uc = LerpCol(t.wave, t.stripHot, heat * 0.85f);
+            const COLORREF lc = LerpCol(t.bar, t.stripHot, heat * 0.55f);
             GfxPoint upper[220], lower[220];
             for (int j = 0; j < 220; ++j) {
                 float v = wave[j], lag = wave[(j + 12) % 220];
@@ -474,10 +482,11 @@ void PaintWings(int style) {
                 upper[j] = { (std::int16_t)S(center - w), (std::int16_t)S(y) };
                 lower[j] = { (std::int16_t)S(center + w), (std::int16_t)S(y) };
                 if (j % 5 == 0)
-                    FillRectCol(S(center - w), S(y), S(center + w + 1), S(y + 1), t.strip);
+                    FillRectCol(S(center - w), S(y), S(center + w + 1), S(y + 1),
+                                LerpCol(t.strip, t.stripHot, heat * 0.7f));
             }
-            gfx_polyline(upper, 220, t.wave, 1);
-            gfx_polyline(lower, 220, t.bar, 1);
+            gfx_polyline(upper, 220, uc, 1);
+            gfx_polyline(lower, 220, lc, 1);
         } else {
             const int span = 2 + int(61 * std::clamp(g_state->wing[side], 0.f, 1.f));
             for (int row = 0; row < 44; ++row) {
@@ -504,11 +513,16 @@ void PaintWings(int style) {
                         FillRectCol(S(x), S(y), S(x + (edge < 0 ? length : -length)), S(y + 1), tick);
                     }
                 } else {
+                    // matrix: lit cells heat toward stripHot with the envelope
+                    const float heat = std::clamp(g_state->wing[side], 0.f, 1.f);
                     for (int col = 0; col < 12; ++col) {
                         int x = base + (side ? -1 : 1) * (col * 10 - 55);
                         bool lit = col * 5 + 2 < width;
+                        const COLORREF litCol = col > 8
+                            ? LerpCol(t.bar, t.stripHot, heat * 0.6f)
+                            : LerpCol(t.wave, t.stripHot, heat * 0.8f);
                         FillRectCol(S(x - 2), S(y - 1), S(x + (lit ? 3 : 0)), S(y + (lit ? 3 : 1)),
-                                    lit ? (col > 8 ? t.bar : t.wave) : LerpCol(t.outer, t.wave, .30f));
+                                    lit ? litCol : LerpCol(t.outer, t.wave, .30f));
                     }
                 }
             }
@@ -523,12 +537,45 @@ void PaintWings(int style) {
 // original TR grid on top so selection keeps the original coordinates.
 void PaintFieldLayout() {
     const Theme& t = Th();
+    const float imp = Impact();
     FillRectCol(0, 0, S(kLogicalW), S(kLogicalH),
                 LerpCol(t.outer, t.panel, 0.55f));
 
+    // instrument paper: faint dot grid gives the empty upper field a scale
+    const COLORREF grid = LerpCol(t.seam, t.panel, 0.35f);
+    for (int y = 64; y < 330; y += 16)
+        for (int x = 24; x < 620; x += 16)
+            FillRectCol(S(x), S(y), S(x + 1), S(y + 1), grid);
+
+    // corner brackets frame the field
+    for (int cx2 : { 20, 618 }) {
+        const int dir = cx2 < 320 ? 1 : -1;
+        FillRectCol(S(cx2), S(56), S(cx2 + dir * 14), S(57), t.frame);
+        FillRectCol(S(cx2), S(56), S(cx2 + dir), S(70), t.frame);
+        FillRectCol(S(cx2), S(424), S(cx2 + dir * 14), S(425), t.frame);
+        FillRectCol(S(cx2), S(411), S(cx2 + dir), S(425), t.frame);
+    }
+
     const int baseY = 340;
+    // baseline flares on a beat: the whole field reads the hit at a glance
     FillRectCol(0, S(baseY), S(kLogicalW), S(baseY + 2),
-                LerpCol(t.frame, t.outer, 0.42f));
+                imp > 0.06f ? LerpCol(t.frame, t.stripHot, std::min(1.f, imp * 1.4f))
+                            : LerpCol(t.frame, t.outer, 0.42f));
+    if (imp > 0.25f)
+        FillRectCol(0, S(baseY - 1), S(kLogicalW), S(baseY), LerpCol(t.frame, t.panel, 0.4f));
+
+    // low-band energy strip across the top: one big shape that loads on beats
+    {
+        const float low = std::clamp((Lv(0) + Lv(1) + Lv(2) + Lv(3)) * 0.25f, 0.f, 1.f);
+        const int w = int(low * 592);
+        FillRectCol(S(24), S(46), S(616), S(48), t.seam);
+        if (w > 0) FillRectCol(S(24), S(44), S(24 + w), S(50), t.bar);
+        DrawCells("LOW", 24, 36, 2);
+        const int mw = int(std::clamp(g_state->wing[0], 0.f, 1.f) * 288);
+        const int mw2 = int(std::clamp(g_state->wing[1], 0.f, 1.f) * 288);
+        if (mw > 0) FillRectCol(S(24), S(52), S(24 + mw), S(54), t.wave);
+        if (mw2 > 0) FillRectCol(S(616 - mw2), S(52), S(616), S(54), t.wave);
+    }
 
     const int cols = memoirs::kSpectrumBands;
     const int pitch = 14, barW = 12;
@@ -561,16 +608,20 @@ void PaintFieldLayout() {
     }
 
     // Channel traces: left channel above the baseline, right below, so the
-    // two never paint over each other.
+    // two never paint over each other. A beat swells the upper trace and
+    // heats its color; the lower trace stays the cool reference.
     GfxPoint pts[120];
     for (int side = 0; side < 2; ++side) {
         const float* wv = side ? g_state->spectrum.waveR : g_state->spectrum.waveL;
+        const int reach = side ? 56 : 62 + int(imp * 46.f);
         for (int i = 0; i < 120; ++i) {
             const float v = std::clamp(wv[i * 2] / 64.0f, -1.f, 1.f);
             pts[i].x = (std::int16_t)S(i * kLogicalW / 119);
-            pts[i].y = (std::int16_t)S(baseY + (side ? 2 + int(v * 62) : -2 - int(v * 62)));
+            pts[i].y = (std::int16_t)S(baseY + (side ? 2 + int(v * reach) : -2 - int(v * reach)));
         }
-        gfx_polyline(pts, 120, side ? LerpCol(t.wave, t.outer, 0.38f) : t.wave, 1);
+        gfx_polyline(pts, 120,
+                     side ? LerpCol(t.wave, t.outer, 0.38f)
+                          : LerpCol(t.wave, t.stripHot, imp * 0.8f), 2);
     }
 
     DrawCells("SOUND MEMOIRS", 24, 24, 0);
@@ -747,6 +798,7 @@ void PaintStackLayout() {
 void PaintRingLayout() {
     const Theme& t = Th();
     const float kPi = 3.14159265f;
+    const float imp = Impact();
     const int cx = 320, cy = 232;
     FillRectCol(0, 0, S(kLogicalW), S(kLogicalH), LerpCol(t.outer, t.panel, 0.42f));
 
@@ -786,17 +838,38 @@ void PaintRingLayout() {
 
     // 43 radial wedges, starting at 12 o'clock: discrete 3x3 blocks at 4px
     // pitch (2px block + 2px gap, the segmented language of the original
-    // window). Current level in bar, decay tail in barLit. No gradients.
+    // window). Current level in bar, decay tail in barLit. A beat pushes the
+    // whole ring outward and heats the base blocks toward stripHot.
     const int bands = memoirs::kSpectrumBands;
+    const int r0 = 108 + int(imp * 8.f);
+    const COLORREF baseCol = imp > 0.06f ? LerpCol(t.bar, t.stripHot, std::min(1.f, imp * 1.2f)) : t.bar;
     for (int k = 0; k < bands; ++k) {
         const float lv = Lv(k);
         const float a = -kPi / 2.f + 2.f * kPi * k / bands;
         const int len = int(lv * 84.f);
-        for (int r = 108; r < 108 + len; r += 4)
-            dot(a, r, 1, t.bar);
+        for (int r = r0; r < r0 + len; r += 4)
+            dot(a, r, 1, r < r0 + 12 ? baseCol : t.bar);
         const int prevLen = int(stage::bandLevel(g_state->spectrum.barsPrev[k]) * 84.f);
-        for (int r = 108 + len; r < 108 + prevLen; r += 4)
+        for (int r = r0 + len; r < r0 + prevLen; r += 4)
             dot(a, r, 1, t.barLit);
+    }
+
+    // outer waveform ring: the live L/R traces ride the boundary circle, so
+    // the rim itself is alive instead of a static dotted guide
+    {
+        const float reach = 8.f + imp * 6.f;
+        for (int side = 0; side < 2; ++side) {
+            const float* wv = side ? g_state->spectrum.waveR : g_state->spectrum.waveL;
+            GfxPoint pts[121];
+            for (int i = 0; i <= 120; ++i) {
+                const float a = -kPi / 2.f + 2.f * kPi * i / 120;
+                const float v = std::clamp(wv[(i % 120) * 2] / 64.f, -1.f, 1.f);
+                const int r = 196 + int(v * reach);
+                pts[i] = { (std::int16_t)S(cx + int(r * cosf(a))),
+                           (std::int16_t)S(cy + int(r * sinf(a))) };
+            }
+            gfx_polyline(pts, 121, side ? LerpCol(t.wave, t.outer, 0.30f) : t.wave, 1);
+        }
     }
 
     // centre: large XY phase figure with a dim afterglow of the previous trace
@@ -807,20 +880,23 @@ void PaintRingLayout() {
                              {(std::int16_t)S(cx - 80), (std::int16_t)S(cy)},
                              {(std::int16_t)S(cx), (std::int16_t)S(cy - 72)} };
         gfx_polyline(frame, 5, LerpCol(t.frame, t.outer, 0.20f), 1);
+        // XY figure driven by the smoothed auto-gain, same as the PHASE stage
+        const float g = g_mem ? g_mem->xyGain : 1.f;
         if (g_mem && g_mem->samples > 0) {
             const int prev = (g_mem->trace + 5) % 6;
             GfxPoint ghost[120];
             for (int i = 0; i < 120; ++i) {
                 const GfxPoint& p = g_mem->traces[prev][i];
-                ghost[i] = { (std::int16_t)S(cx + p.x), (std::int16_t)S(cy - p.y) };
+                ghost[i] = { (std::int16_t)S(cx + ClampI(int(p.x * g), -66, 66)),
+                             (std::int16_t)S(cy - ClampI(int(p.y * g), -60, 60)) };
             }
             gfx_polyline(ghost, 120, LerpCol(t.wave, t.panel, 0.55f), 1);
         }
         GfxPoint pts2[120];
         for (int i = 0; i < 120; ++i) {
-            const float l = std::clamp(g_state->spectrum.waveL[i * 2] / 64.f, -1.f, 1.f);
-            const float r = std::clamp(g_state->spectrum.waveR[i * 2] / 64.f, -1.f, 1.f);
-            pts2[i] = { (std::int16_t)S(cx + int(l * 52)), (std::int16_t)S(cy - int(r * 52)) };
+            const float l = g_state->spectrum.waveL[i * 2], r = g_state->spectrum.waveR[i * 2];
+            pts2[i] = { (std::int16_t)S(cx + ClampI(int((l - r) * .92f * g), -66, 66)),
+                        (std::int16_t)S(cy - ClampI(int((l + r) * .72f * g), -60, 60)) };
         }
         gfx_polyline(pts2, 120, t.bar, 1);
         FillRectCol(S(cx - 1), S(cy - 1), S(cx + 2), S(cy + 2), t.frame);
@@ -847,6 +923,32 @@ void PaintRingLayout() {
         snprintf(b, sizeof(b), "TIME:%03d", std::max(0, int(g_state->seconds)));
         DrawCells(b, 616 - (int)strlen(b) * 8, 30, 3);
     }
+    // corner instrument blocks fill the dead space around the dial:
+    // L/R envelope columns on the left, band ladder + order on the right
+    for (int side = 0; side < 2; ++side) {
+        const int x = 24 + side * 18;
+        const float drive = std::clamp(g_state->wing[side], 0.f, 1.f);
+        const int n = int(drive * 26);
+        for (int i = 0; i < n; ++i) {
+            const int y = 400 - i * 6;
+            FillRectCol(S(x), S(y - 4), S(x + 10), S(y),
+                        i > 19 ? t.stripHot : t.strip);
+        }
+        DrawCells(side ? "R" : "L", x + 1, 410, 2);
+    }
+    {
+        const int lx = 566, ly = 96;
+        for (int k = 0; k < 22; ++k) {
+            const int y = ly + k * 8;
+            const int w = int(Lv(k * 2) * 46);
+            if (w > 0) FillRectCol(S(lx), S(y), S(lx + w), S(y + 3), t.bar);
+            const int pw = int(stage::bandLevel(g_state->spectrum.barsPrev[k * 2]) * 46);
+            if (pw > w) FillRectCol(S(lx + w), S(y), S(lx + pw), S(y + 3), t.barLit);
+        }
+        DrawCells("BAND", lx, 84, 2);
+        static const char* orders[4] = { "ORDER", "ONE", "LOOP", "SHUFFLE" };
+        DrawCells(orders[g_state->localOrder % 4], lx, 286, 2);
+    }
     {
         char b[16];
         snprintf(b, sizeof(b), "TR:%02d", std::max(0, g_state->selected));
@@ -865,7 +967,10 @@ void PaintCrossLayout() {
     FillRectCol(0, 0, S(kLogicalW), S(kLogicalH), LerpCol(t.outer, t.panel, 0.48f));
 
     const int cx = 320, cy = 240;
-    const COLORREF axis = LerpCol(t.frame, t.outer, 0.25f);
+    const float imp = Impact();
+    const COLORREF axis = imp > 0.06f
+        ? LerpCol(t.frame, t.stripHot, std::min(1.f, imp * 1.3f))
+        : LerpCol(t.frame, t.outer, 0.25f);
     FillRectCol(S(cx - 1), S(40), S(cx + 2), S(456), axis);
     FillRectCol(S(24), S(cy - 1), S(616), S(cy + 2), axis);
     for (int y = 56; y < 456; y += 32) {
@@ -933,15 +1038,35 @@ void PaintCrossLayout() {
             textLib(g_libNames[g_state->libCurrentRow], px, 326, 612, 342, t.digit);
         }
         // progress rail with playhead
-        FillRectCol(S(px), S(352), S(608), S(356), t.seam);
-        const int end = px + int(260 * PlayProgress());
+        FillRectCol(S(px), S(352), S(452), S(356), t.seam);
+        const int end = px + int(104 * PlayProgress());
         if (end > px) FillRectCol(S(px), S(352), S(end), S(356), t.bar);
         if (g_state->current >= 0)
-            FillRectCol(S(end - 1), S(350), S(end + 2), S(358),
-                        LerpCol(t.bar, RGB(255, 255, 255), 0.5f));
+            FillRectCol(S(end - 1), S(350), S(end + 2), S(358), t.stripHot);
         static const char* orders[4] = { "ORDER", "ONE", "LOOP", "SHUFFLE" };
         DrawCells(orders[g_state->localOrder % 4], px, 372, 2);
         DrawCells("EXIT", px, 400, g_state->selected == kExitIndex ? 1 : 2);
+        // mini XY phase window fills the rest of the quadrant
+        {
+            const int wx = 470, wy = 330, wr = 606, wb = 436;
+            FillRectCol(S(wx), S(wy), S(wr), S(wb), LerpCol(t.panel, t.outer, 0.30f));
+            FillRectCol(S(wx), S(wy), S(wr), S(wy + 1), t.frame);
+            FillRectCol(S(wx), S(wb - 1), S(wr), S(wb), t.frame);
+            FillRectCol(S(wx), S(wy), S(wx + 1), S(wb), t.frame);
+            FillRectCol(S(wr - 1), S(wy), S(wr), S(wb), t.frame);
+            const int mx = (wx + wr) / 2, my = (wy + wb) / 2;
+            FillRectCol(S(wx + 4), S(my), S(wr - 4), S(my + 1), LerpCol(t.seam, t.panel, 0.3f));
+            FillRectCol(S(mx), S(wy + 4), S(mx + 1), S(wb - 4), LerpCol(t.seam, t.panel, 0.3f));
+            const float g = g_mem ? g_mem->xyGain : 1.f;
+            GfxPoint xy[120];
+            for (int i = 0; i < 120; ++i) {
+                const float l = g_state->spectrum.waveL[i * 2], r = g_state->spectrum.waveR[i * 2];
+                xy[i] = { (std::int16_t)S(mx + ClampI(int((l - r) * .92f * g * .75f), -62, 62)),
+                          (std::int16_t)S(my - ClampI(int((l + r) * .72f * g * .75f), -48, 48)) };
+            }
+            gfx_polyline(xy, 120, t.bar, 1);
+            DrawCells("XY", wx + 4, wy + 10, 2);
+        }
         // quadrant corner bracket
         FillRectCol(S(592), S(440), S(604), S(441), t.frame);
         FillRectCol(S(603), S(428), S(604), S(441), t.frame);
@@ -998,13 +1123,27 @@ void PaintHelixLayout() {
     const float pulse = g_mem ? g_mem->helixPulse : 0.f;
     const float head = g_mem ? g_mem->helixHead : -1.f;
 
-    // observation window
+    // observation window; the frame flares on a beat so the hit reads even
+    // before the torsion wave arrives
     const int wl = 92, wt = 108, wr = 548, wb = 348;
+    const COLORREF wc = impact > 0.06f
+        ? LerpCol(t.frame, t.stripHot, std::min(1.f, impact * 1.3f)) : t.frame;
     FillRectCol(S(wl), S(wt), S(wr), S(wb), LerpCol(t.panel, t.outer, 0.30f));
-    FillRectCol(S(wl), S(wt), S(wr), S(wt + 1), t.frame);
-    FillRectCol(S(wl), S(wb - 1), S(wr), S(wb), t.frame);
-    FillRectCol(S(wl), S(wt), S(wl + 1), S(wb), t.frame);
-    FillRectCol(S(wr - 1), S(wt), S(wr), S(wb), t.frame);
+    FillRectCol(S(wl), S(wt), S(wr), S(wt + 1), wc);
+    FillRectCol(S(wl), S(wb - 1), S(wr), S(wb), wc);
+    FillRectCol(S(wl), S(wt), S(wl + 1), S(wb), wc);
+    FillRectCol(S(wr - 1), S(wt), S(wr), S(wb), wc);
+    // channel load strips inside the window edges: segmented, mirrored
+    for (int side = 0; side < 2; ++side) {
+        const float drive = std::clamp(g_state->wing[side], 0.f, 1.f);
+        const int n = int(drive * 54);
+        const int y = side ? wb - 8 : wt + 5;
+        for (int i = 0; i < n; ++i) {
+            const int x = wl + 6 + i * 8;
+            FillRectCol(S(x), S(y), S(x + 5), S(y + 3),
+                        i > 40 ? t.stripHot : t.strip);
+        }
+    }
     // corner rivets on the window frame
     for (int x : { wl + 4, wr - 6 })
         for (int y : { wt + 4, wb - 6 })
@@ -1047,7 +1186,11 @@ void PaintHelixLayout() {
         const float d = head >= 0.f ? u - head : 9.f;
         return base + 16.f * pulse * std::exp(-d * d * 20.f);
     };
-    const float spin = active ? float(g_state->seconds) * 2.4f : 0.6f;
+    // rotation speed follows the music: idle crawl, faster with sustained
+    // energy, a beat kicks it further (impact integrates into the phase)
+    const float spin = active
+        ? float(g_state->seconds) * (2.4f + 3.2f * sustain) + impact * 1.6f
+        : 0.6f;
     const float turns = 2.6f;   // ~2.6 full twists across the window
 
     // 20 cross pins: chunky bars whose width follows the section; side-on

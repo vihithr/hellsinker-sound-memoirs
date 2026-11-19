@@ -23,6 +23,10 @@ struct Memory {
     std::array<std::array<GfxPoint,120>,6> traces{};
     float lowSustain=0, impact=0, lowFloor=0, lastLow=0;
     float wing[2]{};
+    // Slow auto-gain for the XY phase figures: tracks the recent peak with a
+    // fast attack / slow release so quiet passages expand instead of sitting
+    // in a ball at the centre, and one loud spike cannot squash what follows.
+    float xyGain=1.f;
     // Slow per-channel peak for the HELIX rack rails (hold ~0.8 s, fall 0.55/s).
     float meterPeak[2]{};
     int meterAge[2]{};
