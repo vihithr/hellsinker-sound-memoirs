@@ -1355,7 +1355,7 @@ void PaintDiveLayout() {
             for (int i = 0; i <= RS; ++i) {
                 const float tt = float(i) / RS;
                 const float v = std::clamp(wv[(i * 14) % 240] / 64.f, -1.f, 1.f);
-                const float disp = v * std::min(14.f, len * 0.12f);
+                const float disp = v * std::min(34.f, len * 0.22f);
                 rail[i] = { (std::int16_t)S(cx + int(ax + dx * tt + nx * disp)),
                             (std::int16_t)S(cy + int(ay + dy * tt + ny * disp)) };
             }
@@ -1470,7 +1470,7 @@ void PaintDiveLayout() {
             pulse = pulse * pulse * pulse;                 // sharp flash peak
             // never fully dark: a resting ember stays lit between flashes
             const float glow = 0.22f + 0.78f * pulse;
-            const float blur = 2.f + 9.f * pulse;          // edge blur radius
+            const float blur = 3.f + 11.f * pulse;         // glare radius
             // theme-coherent: halo is the hot accent, core lifts toward the
             // theme ink (not raw white) so the glare keeps the palette's hue
             const COLORREF halo = LerpCol(t.stripHot, t.panel, fade * 0.4f);
@@ -1478,19 +1478,15 @@ void PaintDiveLayout() {
             for (int c = 0; c < 8; ++c) {
                 const int bx = oct[c].x, by = oct[c].y;
                 const int b = int(blur);
-                // soft radial halo, no hard square body at any phase
-                AlphaFill(bx - b - 3, by - b - 3, bx + b + 4, by + b + 4,
-                          halo, int((18 + 40 * pulse) * glow));
-                AlphaFill(bx - b, by - b, bx + b + 1, by + b + 1,
-                          halo, int((40 + 80 * pulse) * glow));
-                AlphaFill(bx - b / 2 - 1, by - b / 2 - 1, bx + b / 2 + 2, by + b / 2 + 2,
-                          halo, int((70 + 110 * pulse) * glow));
-                // bright centre is itself a tiny soft glow, never a solid block
+                // true radial discs (alpha ellipse): round soft glare, no
+                // square body or hard edge at any phase
+                gfx_alpha_ellipse(bx - b - 3, by - b - 3, bx + b + 4, by + b + 4,
+                                  halo, int((26 + 50 * pulse) * glow));
+                gfx_alpha_ellipse(bx - b, by - b, bx + b + 1, by + b + 1,
+                                  halo, int((60 + 100 * pulse) * glow));
                 const int cs = 1 + int(2 * pulse);
-                AlphaFill(bx - cs - 1, by - cs - 1, bx + cs + 2, by + cs + 2,
-                          core, int((90 + 90 * pulse) * glow));
-                AlphaFill(bx - cs, by - cs, bx + cs + 1, by + cs + 1,
-                          core, int((150 + 105 * pulse) * glow));
+                gfx_alpha_ellipse(bx - cs - 1, by - cs - 1, bx + cs + 2, by + cs + 2,
+                                  core, int((120 + 110 * pulse) * glow));
             }
         }
     }

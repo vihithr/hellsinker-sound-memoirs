@@ -3,7 +3,7 @@
 // Bresenham instead of using Canvas stroke() (which always antialiases).
 const GFX_CLEAR = 1, GFX_RECT = 2, GFX_ALPHA_RECT = 3, GFX_LINE = 4,
       GFX_POLYLINE = 5, GFX_POLYGON = 6, GFX_ELLIPSE = 7, GFX_BLIT = 8,
-      GFX_PUSH_CLIP = 9, GFX_POP_CLIP = 10;
+      GFX_PUSH_CLIP = 9, GFX_POP_CLIP = 10, GFX_ALPHA_ELLIPSE = 11;
 const CMD_SIZE = 20;
 
 export async function createScene(canvas, core) {
@@ -115,6 +115,25 @@ export async function createScene(canvas, core) {
                       Math.abs(x1 - x0) / 2, Math.abs(y1 - y0) / 2,
                       0, 0, Math.PI * 2);
           ctx.fill(); break;
+        case GFX_ALPHA_ELLIPSE: {
+          // soft radial glare: alpha at centre fading to 0 at the rim
+          const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+          const rx = Math.abs(x1 - x0) / 2, ry = Math.abs(y1 - y0) / 2;
+          const r = Math.max(rx, ry);
+          const a = (alpha / 255);
+          const m = /rgb\((\d+),(\d+),(\d+)\)/.exec(color);
+          const cr = m ? +m[1] : 255, cg = m ? +m[2] : 255, cb = m ? +m[3] : 255;
+          const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+          g.addColorStop(0, `rgba(${cr},${cg},${cb},${a})`);
+          g.addColorStop(1, `rgba(${cr},${cg},${cb},0)`);
+          ctx.save();
+          ctx.fillStyle = g;
+          ctx.beginPath();
+          ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+          break;
+        }
         case GFX_BLIT: {
           // Shared gfx_blit carries destination size in the second point.
           // A {0,0} size falls back to the source cell size (revision-1 streams).

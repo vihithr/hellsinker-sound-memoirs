@@ -48,7 +48,8 @@ enum GfxOp : std::uint8_t {
     GFX_ELLIPSE,
     GFX_BLIT,
     GFX_PUSH_CLIP,
-    GFX_POP_CLIP
+    GFX_POP_CLIP,
+    GFX_ALPHA_ELLIPSE   // radial-gradient soft disc (beacon glare)
 };
 
 // A run of CJK/Unicode text, addressed by UTF-32 code points. The desktop GDI
@@ -94,6 +95,9 @@ void gfx_polyline(const GfxPoint* pts, int n, COLORREF c, int width);
 void gfx_polygon(const GfxPoint* pts, int n, COLORREF c);
 // Ellipse inscribed in [x0,y0]-[x1,y1] (border + fill in the same color).
 void gfx_ellipse(int x0, int y0, int x1, int y1, COLORREF c);
+// Soft radial disc: alpha at the centre fading to 0 at the rim. Used for
+// beacon glare so no hard square/edge is ever visible.
+void gfx_alpha_ellipse(int x0, int y0, int x1, int y1, COLORREF c, int alpha);
 // Atlas blit: copy cell (sx,sy,sw,sh) from atlas src to (dx,dy) sized
 // (dw,dh). src is the themed cell-atlas index (0..4), matching the resource
 // ids loaded by the desktop backend and wasm/assets/cells_<src>.png.

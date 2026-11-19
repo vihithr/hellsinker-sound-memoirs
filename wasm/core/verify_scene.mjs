@@ -48,7 +48,7 @@ function fill({ theme = 0, tick = 40, selected = 7, current = 3, seconds = 3.25,
   dv.setFloat64(2728, duration, true);
 }
 
-const KNOWN_OPS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+const KNOWN_OPS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
 
 function render() {
   core._scene_begin();

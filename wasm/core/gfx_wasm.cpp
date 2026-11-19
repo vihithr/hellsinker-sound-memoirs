@@ -109,6 +109,14 @@ void gfx_ellipse(int x0, int y0, int x1, int y1, COLORREF c) {
     cmd.x1 = (std::int16_t)x1; cmd.y1 = (std::int16_t)y1;
     push(cmd);
 }
+void gfx_alpha_ellipse(int x0, int y0, int x1, int y1, COLORREF c, int alpha) {
+    if (alpha <= 0 || x1 <= x0 || y1 <= y0) return;
+    GfxCmd cmd{}; cmd.op = GFX_ALPHA_ELLIPSE; cmd.color = c;
+    cmd.alpha = (std::uint8_t)(alpha > 255 ? 255 : alpha);
+    cmd.x0 = (std::int16_t)x0; cmd.y0 = (std::int16_t)y0;
+    cmd.x1 = (std::int16_t)x1; cmd.y1 = (std::int16_t)y1;
+    push(cmd);
+}
 void gfx_blit(int src, int sx, int sy, int sw, int sh, int dx, int dy,
               int dw, int dh) {
     GfxCmd cmd{}; cmd.op = GFX_BLIT; cmd.src = (std::uint8_t)src;

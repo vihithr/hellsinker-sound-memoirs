@@ -92,6 +92,24 @@ def alpha_rect(x0, y0, x1, y1, color, alpha):
                          int(b * (1 - a) + color[2] * a + .5))
 
 
+def alpha_ellipse(x0, y0, x1, y1, color, alpha):
+    import math
+    cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+    rx, ry = max(1.0, (x1 - x0) / 2.0), max(1.0, (y1 - y0) / 2.0)
+    a0 = alpha / 255.0
+    for y in range(max(0, y0), min(480, y1)):
+        for x in range(max(0, x0), min(640, x1)):
+            dx, dy = (x + .5 - cx) / rx, (y + .5 - cy) / ry
+            d = math.sqrt(dx * dx + dy * dy)
+            if d >= 1.0:
+                continue
+            a = (1.0 - d) ** 2 * a0
+            r, g, b = pix[x, y]
+            pix[x, y] = (int(r * (1 - a) + color[0] * a + .5),
+                         int(g * (1 - a) + color[1] * a + .5),
+                         int(b * (1 - a) + color[2] * a + .5))
+
+
 def line(x0, y0, x1, y1, color, width):
     x0, y0, x1, y1 = int(x0), int(y0), int(x1), int(y1)
     if width == 1 and y0 == y1:
@@ -119,6 +137,8 @@ for i in range(n):
         rect(x0, y0, x1, y1, color)
     elif op == 3:    # ALPHA_RECT
         alpha_rect(x0, y0, x1, y1, color, alpha)
+    elif op == 11:   # ALPHA_ELLIPSE
+        alpha_ellipse(x0, y0, x1, y1, color, alpha)
     elif op == 4:    # LINE
         line(x0, y0, x1, y1, color, width)
     elif op == 5:    # POLYLINE
