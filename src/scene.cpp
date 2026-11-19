@@ -1808,7 +1808,11 @@ void PaintSonoLayout() {
             for (int y = baseY - prevUp; y < baseY - up; y += 3)
                 FillRectCol(S(x1), S(y), S(x2), S(std::min(y + 2, baseY - up)), t.barLit);
         }
-        FillRectCol(S(20), S(72), S(532), S(73), LerpCol(t.frame, t.panel, 0.35f));
+        // print-head baseline: the live spectrum above prints INTO the
+        // history waterfall below - accent line + > < feed markers
+        FillRectCol(S(20), S(72), S(532), S(73), t.accentHot);
+        DrawCellsTL(">", 22, 66, 0);
+        DrawCellsTL("<", 522, 66, 0);
     }
     // waterfall body (y 76..428 = 88 rows x 4px): newest at top, uniform down
     if (g_mem) {
@@ -1839,6 +1843,16 @@ void PaintSonoLayout() {
         FillRectCol(S(x), S(428), S(x + 1), S(431), LerpCol(t.frame, t.panel, 0.45f));
         const int len = (int)strlen(kFreqLabel[i]);
         DrawCellsTL(kFreqLabel[i], x - 4 * len, 432, 4);
+    }
+    // plain-language band tags above each axis region, on the window's top
+    // margin (mini bars only reach y42 at full scale, tags sit at y36..47)
+    {
+        static const char* zone[4] = { "SUB", "LOW", "MID", "HIGH" };
+        static const int zx[4] = { 60, 160, 296, 452 };
+        for (int i = 0; i < 4; ++i) {
+            FillRectCol(S(zx[i] - 2), S(36), S(zx[i] + 24), S(47), CustomPanelCol());
+            DrawCellsTL(zone[i], zx[i], 36, 2);
+        }
     }
 
     // right telemetry column: strict vertical zones, zero overlap
@@ -1961,26 +1975,40 @@ void PaintTrackLayout() {
         for (int c = 0; c < 8; ++c) {
             const int x = colX + c * colW;
             const int v = hasData ? g_mem->trackHex[idx][c] : 0;
-            char vb[4];
-            if (v == 0) { vb[0] = '-'; vb[1] = '-'; }
-            else { vb[0] = hexd[v >> 4]; vb[1] = hexd[v & 15]; }
-            vb[2] = 0;
-            DrawCellsTL(vb, x + 4, y + 1, v == 0 ? 2 : v >= 0xC0 ? 0 : 3);
-            if (v >= 0xC0)
-                FillRectCol(S(x + 2), S(y + 2), S(x + 3), S(y + 12), t.accentHot);
-            // 38px hard-edge energy bar, drawn only when non-zero
-            const int bx = x + 26, bw = 38;
+            // small dim hex value on the left (silent rows stay blank - no
+            // "--" noise); the wide energy block on the right is the hero
+            if (v > 0) {
+                char vb[4] = { hexd[v >> 4], hexd[v & 15], 0, 0 };
+                DrawCellsTL(vb, x + 2, y + 2, 2);
+            }
+            // 44x8 solid note block: wave -> bar -> accentHot by energy,
+            // whole block flashes accentHot on a beat row
+            const int bx = x + 20, bw = 44;
             const int w = int(v / 255.f * bw);
-            if (w > 0) FillRectCol(S(bx), S(y + 5), S(bx + w), S(y + 9), t.bar);
-            const int pw = hasData && age + 1 < H
-                ? int(g_mem->trackHex[(g_mem->trackHead - 2 - age + H * 4) % H][c] / 255.f * bw) : 0;
-            if (pw > w) FillRectCol(S(bx + w), S(y + 5), S(bx + pw), S(y + 9), t.barLit);
+            if (w > 0) {
+                const COLORREF bc = beatRow ? t.accentHot
+                                  : v >= 0xC0 ? t.accentHot
+                                  : v >= 0x60 ? t.bar : t.wave;
+                FillRectCol(S(bx), S(y + 3), S(bx + w), S(y + 11), bc);
+            }
         }
     }
     gfx_pop_clip();
-    // playhead slot: two 1px frame rules bracket the passing rows
-    FillRectCol(S(18), S(playY - 1), S(622), S(playY), t.frame);
-    FillRectCol(S(18), S(playY + rowH), S(622), S(playY + rowH + 1), t.frame);
+    // playhead slot: two 1px frame rules bracket the passing rows; any
+    // channel currently sounding (v > 60) lights a 2px trigger bar in its
+    // column - rhythm-game readable at a glance
+    FillRectCol(S(18), S(playY - 1), S(622), S(playY), CustomFrameCol());
+    FillRectCol(S(18), S(playY + rowH), S(622), S(playY + rowH + 1), CustomFrameCol());
+    if (g_mem) {
+        const int headIdx = (g_mem->trackHead - 1 + H * 4) % H;
+        const int hy = playY + frac;
+        for (int c = 0; c < 8; ++c) {
+            if (g_mem->trackHex[headIdx][c] > 60) {
+                const int x = colX + c * colW;
+                FillRectCol(S(x + 20), S(hy), S(x + 64), S(hy + 2), t.accentHot);
+            }
+        }
+    }
 
     PaintCustomHeader("TRACK / 08");
     PaintCustomFooter(false);
@@ -2017,48 +2045,82 @@ void PaintDeckLayout() {
     const float p = float(PlayProgress());
     const float imp = Impact();
 
-    // ---- cassette bay -------------------------------------------------------
+    // ---- military data-recorder bay ------------------------------------------
     InsetPanel(16, 34, 624, 240);
+    // registration corners on the bay
+    {
+        const COLORREF fc = CustomFrameCol();
+        for (int cx2 : { 22, 618 }) {
+            const int dir = cx2 < 320 ? 1 : -1;
+            for (int cy2 : { 40, 234 }) {
+                const int vdir = cy2 < 137 ? 1 : -1;
+                FillRectCol(S(cx2), S(cy2), S(cx2 + dir * 10), S(cy2 + (vdir > 0 ? 1 : 0)), fc);
+                FillRectCol(S(cx2), S(cy2), S(cx2 + (dir > 0 ? 1 : 0)), S(cy2 + vdir * 10), fc);
+            }
+        }
+    }
     const int ly = 134, lx = 166, rx = 474;
     const int rL = 52 - int(20 * p), rR = 32 + int(20 * p);
-    const COLORREF tape = LerpCol(t.panel, t.ink, 0.22f);
-    const COLORREF tapeLine = LerpCol(t.panel, t.ink, 0.36f);
-    auto circle = [&](int cx, int cy, int r, COLORREF c, int w) {
-        GfxPoint pts[49];
-        for (int i = 0; i <= 48; ++i) {
-            const float a = 2.f * kPi * i / 48;
+    const COLORREF tape = LerpCol(CustomPanelCol(), t.ink, 0.22f);
+    const COLORREF tapeLine = LerpCol(CustomPanelCol(), t.ink, 0.36f);
+    // hard-edge octagon ring (industrial data platter, not a soft disc)
+    auto octRing = [&](int cx, int cy, int r, COLORREF c, int w) {
+        GfxPoint pts[9];
+        for (int i = 0; i <= 8; ++i) {
+            const float a = kPi / 8.f + i * kPi / 4.f;
             pts[i] = { (std::int16_t)S(cx + int(r * cosf(a))),
                        (std::int16_t)S(cy + int(r * sinf(a))) };
         }
-        gfx_polyline(pts, 49, c, w);
+        gfx_polyline(pts, 9, c, w);
+    };
+    auto octFill = [&](int cx, int cy, int r, COLORREF c) {
+        GfxPoint pts[8];
+        for (int i = 0; i < 8; ++i) {
+            const float a = kPi / 8.f + i * kPi / 4.f;
+            pts[i] = { (std::int16_t)S(cx + int(r * cosf(a))),
+                       (std::int16_t)S(cy + int(r * sinf(a))) };
+        }
+        gfx_polygon(pts, 8, c);
     };
     const double spin = g_mem ? g_mem->deckClock : 0.0;
     for (int side = 0; side < 2; ++side) {
         const int cx = side ? rx : lx, r = side ? rR : rL;
-        gfx_ellipse(S(cx - r), S(ly - r), S(cx + r + 1), S(ly + r + 1), tape);
-        circle(cx, ly, r, t.frame, S(1));
-        for (int rr = r - 6; rr > 20; rr -= 6) circle(cx, ly, rr, tapeLine, S(1));
-        // precision drive hub: 18px, six 1px gear spokes + hex axle + pin
-        gfx_ellipse(S(cx - 18), S(ly - 18), S(cx + 19), S(ly + 19), t.panel);
-        circle(cx, ly, 18, t.frame, S(1));
-        for (int i = 0; i < 6; ++i) {
-            const float a = float(spin) + i * kPi / 3.f;
-            GfxPoint spoke[2] = {
-                { (std::int16_t)S(cx + int(5 * cosf(a))), (std::int16_t)S(ly + int(5 * sinf(a))) },
-                { (std::int16_t)S(cx + int(16 * cosf(a))), (std::int16_t)S(ly + int(16 * sinf(a))) } };
-            gfx_polyline(spoke, 2, t.frame, S(1));
+        octFill(cx, ly, r, tape);
+        octRing(cx, ly, r, CustomFrameCol(), S(1));
+        for (int rr = r - 6; rr > 22; rr -= 6) octRing(cx, ly, rr, tapeLine, S(1));
+        // 4 aiming stubs on the platter's cardinal corners (static chassis)
+        for (int i = 0; i < 4; ++i) {
+            const float a = i * kPi / 2.f;
+            GfxPoint seg[2] = {
+                { (std::int16_t)S(cx + int((r + 2) * cosf(a))), (std::int16_t)S(ly + int((r + 2) * sinf(a))) },
+                { (std::int16_t)S(cx + int((r + 7) * cosf(a))), (std::int16_t)S(ly + int((r + 7) * sinf(a))) } };
+            gfx_polyline(seg, 2, CustomFrameCol(), S(1));
         }
-        GfxPoint hex[7];
-        for (int i = 0; i <= 6; ++i) {
-            const float a = float(spin) + i * kPi / 3.f;
-            hex[i] = { (std::int16_t)S(cx + int(5 * cosf(a))),
-                       (std::int16_t)S(ly + int(5 * sinf(a))) };
+        // industrial lock hub: static crosshair scale ring + rotating
+        // three-blade hard reticle rotor + vermilion lock pin
+        octFill(cx, ly, 20, CustomPanelCol());
+        octRing(cx, ly, 20, CustomFrameCol(), S(1));
+        for (int i = 0; i < 4; ++i) {
+            const float a = kPi / 4.f + i * kPi / 2.f;
+            GfxPoint seg[2] = {
+                { (std::int16_t)S(cx + int(16 * cosf(a))), (std::int16_t)S(ly + int(16 * sinf(a))) },
+                { (std::int16_t)S(cx + int(19 * cosf(a))), (std::int16_t)S(ly + int(19 * sinf(a))) } };
+            gfx_polyline(seg, 2, LerpCol(CustomFrameCol(), CustomPanelCol(), 0.3f), S(1));
         }
-        gfx_polyline(hex, 7, t.frame, S(1));
-        FillRectCol(S(cx - 1), S(ly - 1), S(cx + 2), S(ly + 2), t.bar);
+        for (int i = 0; i < 3; ++i) {
+            const float a = float(spin) + i * 2.f * kPi / 3.f;
+            // blade: a hard 3-point vane from the axle to the hub rim
+            GfxPoint blade[4] = {
+                { (std::int16_t)S(cx + int(4 * cosf(a - 0.35f))), (std::int16_t)S(ly + int(4 * sinf(a - 0.35f))) },
+                { (std::int16_t)S(cx + int(15 * cosf(a))), (std::int16_t)S(ly + int(15 * sinf(a))) },
+                { (std::int16_t)S(cx + int(4 * cosf(a + 0.35f))), (std::int16_t)S(ly + int(4 * sinf(a + 0.35f))) },
+                { (std::int16_t)S(cx + int(4 * cosf(a - 0.35f))), (std::int16_t)S(ly + int(4 * sinf(a - 0.35f))) } };
+            gfx_polyline(blade, 4, CustomFrameCol(), S(1));
+        }
+        FillRectCol(S(cx - 2), S(ly - 2), S(cx + 3), S(ly + 3), t.accentHot);
     }
     // tape path: taut 1px polyline via 5x5 hollow guide rollers; the centre
-    // tension roller bounces 0..4px on impact
+    // assembly is a stepped pixel head block that snaps 0..4px on impact
     {
         const int bounce = int(imp * 4.f);
         GfxPoint path[5] = {
@@ -2067,17 +2129,22 @@ void PaintDeckLayout() {
             { (std::int16_t)S(320), (std::int16_t)S(210 + bounce) },
             { (std::int16_t)S(420), (std::int16_t)S(210) },
             { (std::int16_t)S(rx), (std::int16_t)S(ly + rR) } };
-        gfx_polyline(path, 5, LerpCol(t.ink, t.frame, 0.35f), S(1));
+        gfx_polyline(path, 5, LerpCol(t.ink, CustomFrameCol(), 0.35f), S(1));
         for (int gx : { 220, 420 }) {
-            FillRectCol(S(gx - 2), S(208), S(gx + 3), S(213), t.frame);
-            FillRectCol(S(gx - 1), S(209), S(gx + 2), S(212), t.panel);
+            FillRectCol(S(gx - 2), S(208), S(gx + 3), S(213), CustomFrameCol());
+            FillRectCol(S(gx - 1), S(209), S(gx + 2), S(212), CustomPanelCol());
         }
-        FillRectCol(S(318), S(208 + bounce), S(323), S(213 + bounce), t.frame);
-        FillRectCol(S(319), S(209 + bounce), S(322), S(212 + bounce), t.panel);
+        // stepped head assembly: wide base + narrow pickup + hot gap line
+        FillRectCol(S(310), S(212 + bounce), S(331), S(218 + bounce), CustomFrameCol());
+        FillRectCol(S(312), S(213 + bounce), S(329), S(217 + bounce), CustomPanelCol());
+        FillRectCol(S(316), S(206 + bounce), S(325), S(213 + bounce), CustomFrameCol());
+        FillRectCol(S(318), S(208 + bounce), S(323), S(212 + bounce), CustomPanelCol());
+        FillRectCol(S(318), S(212 + bounce), S(323), S(213 + bounce),
+                    imp > 0.08f ? t.accentHot : LerpCol(t.accentHot, CustomPanelCol(), 0.5f));
     }
     // ---- VFD timecode window ------------------------------------------------
     InsetPanel(244, 66, 396, 206);
-    DrawCellsTL("DAT / VFD", 284, 74, 2);
+    DrawCellsTL("MEMOIRS // UNIT-09", 252, 74, 2);
     {
         const int secs = std::max(0, int(g_state->seconds));
         const int mm = (secs / 60) % 100, ss = secs % 60;
@@ -2090,14 +2157,22 @@ void PaintDeckLayout() {
         FillRectCol(S(310), S(106), S(313), S(109), cc);
         FillRectCol(S(310), S(117), S(313), S(120), cc);
     }
+    // separator + REC-LOCK / SYNC status microtags under the digits
+    FillRectCol(S(252), S(136), S(388), S(137), LerpCol(CustomFrameCol(), CustomPanelCol(), 0.4f));
+    {
+        const bool rec = g_state->current >= 0 && !g_state->libPaused;
+        DrawCellsTL("REC-LOCK", 252, 140, rec ? 0 : 2);
+        FillRectCol(S(322), S(142), S(326), S(146), rec ? t.accentHot : t.seam);
+        DrawCellsTL("SYNC", 344, 140, g_mem && g_mem->impact > 0.08f ? 0 : 2);
+    }
     {
         char b[16];
         snprintf(b, sizeof(b), "TR:%02d", std::max(0, g_state->current));
-        DrawCellsTL(b, 256, 148, g_state->current >= 0 ? 0 : 2);
+        DrawCellsTL(b, 252, 158, g_state->current >= 0 ? 0 : 2);
         static const char* orders[4] = { "ORDER", "ONE", "LOOP", "SHUFFLE" };
         const char* ow = orders[g_state->localOrder % 4];
-        DrawCellsTL(ow, 384 - (int)strlen(ow) * 8, 148, 2);
-        DrawCellsTL(TransportWord(), 256, 168, g_state->current >= 0 && !g_state->libPaused ? 0 : 2);
+        DrawCellsTL(ow, 388 - (int)strlen(ow) * 8, 158, 2);
+        DrawCellsTL(TransportWord(), 252, 178, g_state->current >= 0 && !g_state->libPaused ? 0 : 2);
     }
 
     // ---- broadcast PPM meters (taller bay: dB row fully independent) --------
