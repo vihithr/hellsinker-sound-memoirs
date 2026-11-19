@@ -41,29 +41,17 @@ struct Memory {
     // and a 1 s clip latch per channel (env >= 0.94 or wave peak >= 61).
     float correlation=0.f;
     float clipHold[2]{};
-    // HELIX / SINK: per-channel level history, one rung every 1/15 s. The
-    // lattice scrolls these upward while the view sinks; each rung keeps the
-    // beat flag so strikes stay visible as they rise past the window.
-    static constexpr int kHist=64;
+    // Eight terrain profiles per second. The painter interpolates their depth.
+    static constexpr int kHist=32;
+    static constexpr int kProfile=22;
+    float relief[kHist][kProfile]{};
     float histL[kHist]{}, histR[kHist]{};
-    unsigned char histBeat[kHist]{};
     int histHead=0;
-    // Rung pushes lock to sinkClock (integer boundaries) so the painter's
-    // sub-row offset and the ring head advance on the SAME frame - no tear.
     double histClock=-1;
-    // Signed waveform sample per rung (-1..1): SINK projects this onto the
-    // strand's horizontal offset, so the wave itself draws the helix.
-    float histWaveL[kHist]{}, histWaveR[kHist]{};
-    // Running winding phase: advances with the signed wave (frequency sets
-    // the crossing rate, amplitude the swing), so the strands keep twisting
-    // even when a window mean cancels out.
-    float windL=0, windR=0;
-    // DIVE: frozen birth snapshot per layer (drive / high spark / winding
-    // phase), keyed by the layer's birth index. A layer keeps its birth
-    // imprint from spawn to screen exit, independent of the 8 Hz history.
+    // DIVE gates retain their energy and transient at birth.
     static constexpr int kDiveSlots=16;
     int diveLastBase=-1;
-    float diveDrive[kDiveSlots]{}, diveSpark[kDiveSlots]{}, divePhase[kDiveSlots]{};
+    float diveDrive[kDiveSlots]{}, diveSpark[kDiveSlots]{};
     int head=0, trace=0, samples=0;
     double last=-1;
     double motion=-1;

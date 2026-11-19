@@ -355,19 +355,10 @@ function hitLayout(x,y){
   }
   return null; // FIELD / HELIX use the TAB grid / keyboard
 }
-// Progress rails of the custom layouts: [x0,x1,y0,y1] hit bands.
-// All six custom layouts share the chassis footer rail (y 454..457).
-const LAYOUT_SEEK={1:[16,624,448,462],2:[16,624,448,462],3:[16,624,448,462],4:[16,624,448,462],5:[16,624,448,462],6:[16,624,448,462],7:[16,624,448,462],8:[16,624,448,462],9:[16,624,448,462]};
-function seekLayout(f){
-  if(!buffer)return;
-  offset=Math.max(0,Math.min(1,f))*buffer.duration;
-  if(source)start();
-  seekScrubMs=Math.round(offset*1000);
-}
 screen.addEventListener("click",e=>{
   const {x,y}=canvasPoint(e);
   // Channel rail (TR/LIB/SYS) sits at x 362..486, y 272..288 on every page.
-  if(y>=272&&y<288&&x>=366&&x<486){
+  if((page!==0||layoutMode===0)&&y>=272&&y<288&&x>=366&&x<486){
     const ch=Math.floor((x-366)/40);
     if(ch>=0&&ch<3){selectPage(ch);return;}
   }
@@ -388,13 +379,14 @@ screen.addEventListener("click",e=>{
     return;
   }
   if(layoutMode!==0){
-    const h=hitLayout(x,y);
-    if(h==="exit"){stop();return;}
-    if(h!==null){select(h);activate();return;}
-    if(showGridOverlay){ // TAB grid keeps the original coordinates
+    if(showGridOverlay){
       if(hitExit(x,y)){stop();return;}
       const i=hitTrack(x,y);if(i!==null){select(i);activate();}
+      return;
     }
+    const h=hitLayout(x,y);
+    if(h==="exit"){stop();return;}
+    if(h!==null){select(h);activate();}
     return;
   }
   if(hitExit(x,y)){stop();return;}
@@ -402,13 +394,6 @@ screen.addEventListener("click",e=>{
 });
 screen.addEventListener("dblclick",e=>{
   const {x,y}=canvasPoint(e);
-  if(layoutMode!==0&&page===0){
-    const h=hitLayout(x,y);
-    if(h==="exit"){stop();return;}
-    if(h!==null){select(h);activate();}
-    return;
-  }
-  if(hitExit(x,y)){stop();return;}
   // Double-click a LIB row to play it (single click only moves the cursor).
   if(page===1&&y>=313&&y<439){
     const row=Math.floor((y-313)/18),idx=libScroll+row;
@@ -417,53 +402,36 @@ screen.addEventListener("dblclick",e=>{
   }
 });
 // ---- scrubbable seek rail (LIB page, y 266..268) --------------------------
-let seeking=false;
-function seekFromX(x){
-  if(!buffer)return;
-  const f=Math.max(0,Math.min(1,(x-154)/(486-154)));
-  offset=f*buffer.duration;
-  if(source)start();          // keep playing from the new spot; stay paused otherwise
-  seekScrubMs=Math.round(offset*1000);
+let scrub=null;
+function updateScrub(x){
+  const fraction=Math.max(0,Math.min(1,(x-scrub.left)/(scrub.right-scrub.left)));
+  scrub.seconds=fraction*scrub.buffer.duration;
 }
-let seekScrubMs=-1;
 screen.addEventListener("pointerdown",e=>{
+  if(scrub||!buffer||e.button!==0)return;
   const {x,y}=canvasPoint(e);
-  screen.focus();markRailActivity();
-  // Wide hit band so a finger can grab the 2px rail on a phone.
-  if(page===1&&y>=258&&y<=278&&x>=150&&x<=490){
-    seeking=true;seekBand=null;
-    try{screen.setPointerCapture(e.pointerId);}catch(_){}
-    seekFromX(x);
-    e.preventDefault();
-    return;
-  }
-  // Custom-layout progress rails are scrubbable too.
-  if(page===0&&layoutMode!==0){
-    const b=LAYOUT_SEEK[layoutMode];
-    if(b&&x>=b[0]-6&&x<=b[1]+6&&y>=b[2]&&y<=b[3]){
-      seeking=true;seekBand=b;
-      try{screen.setPointerCapture(e.pointerId);}catch(_){}
-      seekLayout((x-b[0])/(b[1]-b[0]));
-      e.preventDefault();
-      return;
-    }
-  }
+  const library=page===1&&x>=150&&x<=490&&y>=258&&y<=278;
+  const footer=page===0&&layoutMode!==0&&!showGridOverlay&&x>=10&&x<=630&&y>=448&&y<=462;
+  if(!library&&!footer)return;
+  scrub={id:e.pointerId,buffer,left:library?154:16,right:library?486:624,seconds:0};
+  updateScrub(x);
+  screen.setPointerCapture(e.pointerId);
+  e.preventDefault();
 });
-let seekBand=null;
 screen.addEventListener("pointermove",e=>{
-  if(!seeking)return;
-  const {x}=canvasPoint(e);
-  if(seekBand)seekLayout((x-seekBand[0])/(seekBand[1]-seekBand[0]));
-  else seekFromX(x);
+  if(scrub?.id!==e.pointerId)return;
+  updateScrub(canvasPoint(e).x);
   e.preventDefault();
 });
 screen.addEventListener("pointerup",e=>{
-  if(seeking){
-    seeking=false;
-    try{screen.releasePointerCapture(e.pointerId);}catch(_){}
-  }
+  if(scrub?.id!==e.pointerId)return;
+  updateScrub(canvasPoint(e).x);
+  if(scrub.buffer===buffer)seek(scrub.seconds);
+  scrub=null;
 });
-screen.addEventListener("pointercancel",()=>{seeking=false;});
+screen.addEventListener("lostpointercapture",e=>{
+  if(scrub?.id===e.pointerId)scrub=null;
+});
 screen.addEventListener("pointerdown",()=>{screen.focus();markRailActivity();});
 window.addEventListener("keydown",e=>{
   const k=e.key;
@@ -515,7 +483,7 @@ window.addEventListener("keydown",e=>{
   if(k==="F7"){e.preventDefault();cycleStage();return;}
   if(k==="F8"){e.preventDefault();cycleWing();return;}
   if(k==="F9"){e.preventDefault();cycleLayout();return;}
-  if(k==="Tab"&&(layoutMode===1||layoutMode===4)){e.preventDefault();showGridOverlay=!showGridOverlay;return;}
+  if(k==="Tab"&&page===0&&(layoutMode===1||layoutMode===4)){e.preventDefault();showGridOverlay=!showGridOverlay;return;}
   if(k==="Escape"){stop();return;}
 });
 async function importFiles(picked){
@@ -595,7 +563,8 @@ try{
       stateView.setInt32(2660,layoutMode,true);
       stateView.setInt32(2664,page,true); // page: TR/LIB/SYS
       stateView.setInt32(2668,-1,true); // hoverChannel
-      stateView.setFloat64(2672,seconds,true);
+      const shownSeconds=scrub&&scrub.buffer===buffer?scrub.seconds:seconds;
+      stateView.setFloat64(2672,shownSeconds,true);
       stateView.setInt32(2680,current!==null&&current>=names.length?1:0,true);
       stateView.setInt32(2684,loading?1:0,true);
       // Keep the TR/LIB/SYS rail visible: it is the only on-screen page switch.
@@ -618,7 +587,7 @@ try{
       stateView.setInt32(2760,localOrder,true);
       stateView.setInt32(2764,paused?1:0,true);
       stateView.setInt32(2768,current!==null&&current>=names.length?1:0,true);
-      stateView.setInt32(2772,seeking?seekScrubMs:Math.round(position()*1000),true);
+      stateView.setInt32(2772,Math.round(shownSeconds*1000),true);
       for(let i=0;i<searchText.length&&i<32;i++)stateView.setInt32(2844+i*4,searchText.charCodeAt(i),true);
       stateView.setInt32(2972,searchText.length,true);
       // Row index (within the filtered list) of the playing local track.

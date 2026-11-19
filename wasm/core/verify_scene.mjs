@@ -99,8 +99,8 @@ for (let layout = 1; layout <= 9; layout++) {
   fill({ layout, showGridOverlay: layout === 1 || layout === 4 ? 1 : 0 });
   results.push({ layout, ...render() });
 }
-// new layouts across every theme (SONO / TRACK / DECK)
-for (let layout = 7; layout <= 9; layout++) {
+// Custom layouts across all five palettes.
+for (let layout = 1; layout <= 9; layout++) {
   for (let theme = 0; theme < 5; theme++) {
     fill({ layout, theme });
     results.push({ layout, theme, ...render() });

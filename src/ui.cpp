@@ -132,6 +132,7 @@ bool draggingSeek=false;
 double dragFraction=0;
 constexpr int seekLeft=154, seekRight=486, seekY=266;
 double seekFraction(double logicalX) {
+    if (page == Page::Tracks) return std::clamp((logicalX - 16) / 608., 0., 1.);
     return std::clamp((logicalX-seekLeft)/(seekRight-seekLeft),0.,1.);
 }
 std::wstring basenameW(const std::wstring&);
@@ -575,6 +576,7 @@ void paintSeekRail(HDC dc, double fraction) {
 // resetting the audio device for every move. WM_PAINT uses the same rail.
 void previewSeek(HWND hwnd,double logicalX) {
     dragFraction=seekFraction(logicalX);
+    if (page == Page::Tracks) { InvalidateRect(hwnd, nullptr, FALSE); return; }
     if (!g_app.backDC) return;
     paintSeekRail(g_app.backDC,dragFraction);
     HDC dc=GetDC(hwnd);
@@ -682,7 +684,8 @@ void PackSceneState(SceneState& st) {
     st.railActivityTick = (int)lastRailActivityTick;
     st.switchTick = (int)switchedAt;
     st.showGridOverlay = fieldGrid ? 1 : 0;
-    st.duration = app.current == kTrackCount ? app.audio.durationSeconds() : 0.0;
+    st.duration = app.current >= 0 ? app.audio.durationSeconds() : 0.0;
+    if (draggingSeek && page == Page::Tracks) st.seconds = st.duration * dragFraction;
     // Uppercased ASCII fallback of the local title for the shared atlas
     // path; the host hook below still paints the true name (Fusion Pixel
     // font) whenever it contains non-ASCII characters.
@@ -839,7 +842,7 @@ void OnKeyDown(HWND hwnd, WPARAM key) {
         InvalidateRect(hwnd,nullptr,FALSE);
         return;
     }
-    if(key==VK_TAB && (app.settings->layoutMode==layout::Field ||
+    if(key==VK_TAB && page==Page::Tracks && (app.settings->layoutMode==layout::Field ||
                        app.settings->layoutMode==layout::Cross)) {
         fieldGrid=!fieldGrid;
         InvalidateRect(hwnd,nullptr,FALSE);
@@ -943,7 +946,7 @@ void HandleLayoutMouse(HWND hwnd, int lx, int ly, bool dbl) {
     }
     // Field / Cross: the EXIT label is always live; the TAB grid keeps the
     // original coordinates so its hit test is the original one.
-    if (mode == layout::Cross && lx >= 432 && lx < 480 && ly >= 344 && ly < 362) {
+    if (!fieldGrid && mode == layout::Cross && lx >= 432 && lx < 480 && ly >= 344 && ly < 362) {
         if (dbl) PostMessageA(hwnd, WM_CLOSE, 0, 0);
         else { app.selected = kExitIndex; InvalidateRect(hwnd, NULL, FALSE); }
         return;
@@ -974,6 +977,13 @@ void OnMouseDown(HWND hwnd, int x, int y, bool dbl) {
     x -= g_offX; y -= g_offY;   // client -> backbuffer (letterbox) coords
     int lx=(int)floor(x/g_scale),ly=(int)floor(y/g_scale);
     if (page == Page::Tracks && app.settings->layoutMode != layout::Original) {
+        if (!fieldGrid && !app.loading && app.current >= 0 && lx >= 16 && lx <= 624 &&
+            ly >= 448 && ly <= 462 && app.audio.durationSeconds() > 0) {
+            draggingSeek = true;
+            SetCapture(hwnd);
+            previewSeek(hwnd, lx);
+            return;
+        }
         HandleLayoutMouse(hwnd, lx, ly, dbl);
         return;
     }
@@ -1194,7 +1204,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             if(draggingSeek) {
                 dragFraction=seekFraction(((short)LOWORD(lParam)-g_offX)/g_scale);
                 draggingSeek=false;ReleaseCapture();
-                if(app.current==kTrackCount)app.audio.seek(app.audio.durationSeconds()*dragFraction);
+                if(app.current>=0 && !app.loading)app.audio.seek(app.audio.durationSeconds()*dragFraction);
             }
             return 0;
         case WM_LBUTTONDOWN: OnMouseDown(hwnd, LOWORD(lParam), HIWORD(lParam), false); return 0;

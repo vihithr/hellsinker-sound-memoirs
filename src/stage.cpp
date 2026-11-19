@@ -158,30 +158,11 @@ void Memory::advance(const memoirs::Spectrum& s,int id,double seconds,bool playi
         histHead=(histHead+1)%kHist;
         histL[histHead]=drive[0];
         histR[histHead]=drive[1];
-        histBeat[histHead]=attack>0.30f?1:0;
-        // Winding phase from drive energy + zero-crossing density: a window
-        // mean of AC audio cancels to zero (the old idle-spin bug), while the
-        // crossing rate tracks pitch. Silence freezes the phase completely.
-        int zcL=0,zcR=0;
-        for(int i=1;i<240;i++){
-            if((s.waveL[i-1]<0)!=(s.waveL[i]<0))++zcL;
-            if((s.waveR[i-1]<0)!=(s.waveR[i]<0))++zcR;
+        for(int j=0;j<kProfile;++j){
+            const int k=j*2;
+            const float level=std::max(s.barsLevel[k],s.barsLevel[std::min(k+1,42)]);
+            relief[histHead][j]=bandLevel(level);
         }
-        const float znL=std::clamp(zcL/120.f,0.f,1.f), znR=std::clamp(zcR/120.f,0.f,1.f);
-        // Asymmetric DNA dance: a base spin while audible, per-channel
-        // zero-crossing modulation, plus a mid-vs-high spectral tilt that
-        // twists the R strand's phase - the pair tightens, opens and
-        // interleaves instead of converging to a rigid mirror image.
-        float mid=0;
-        for(int i=8;i<=22;++i)mid+=std::clamp(s.barsLevel[i]/96.f,0.f,1.f);
-        mid/=15.f;
-        const float baseSpin=(drive[0]+drive[1])>0.04f?0.22f:0.f;
-        const float stepL=baseSpin+drive[0]*(0.25f+0.85f*znL);
-        const float stepR=baseSpin+drive[1]*(0.22f+0.80f*znR)+(mid-high)*0.35f;
-        windL+=stepL;
-        windR+=stepR;
-        histWaveL[histHead]=std::sin(windL);
-        histWaveR[histHead]=std::sin(windR+2.6f+0.65f*std::sin(windL*0.35f));
     }
 
     // DIVE: freeze a birth snapshot whenever a new layer spawns (0.32/s on
@@ -198,7 +179,6 @@ void Memory::advance(const memoirs::Spectrum& s,int id,double seconds,bool playi
             const int slot=b%kDiveSlots;
             diveDrive[slot]=std::clamp((wing[0]+wing[1])*0.5f,0.f,1.f);
             diveSpark[slot]=highSpark;
-            divePhase[slot]=windL;
         }
     }
 

@@ -36,17 +36,24 @@
 `C` / `T` 在 ORIGINAL → DARK → NEON → PAPER → BLUEPRINT 之间循环，配色同时作用于背景、频谱柱、电平、
 外框、选中高亮、标题与文字。
 
-### 五种画面布局
+### 十种画面布局
 
-`F9` 在五种构图之间循环，与配色、演出（`F7`）、侧翼（`F8`）相互独立：
+`F9` 在十种构图之间循环，与配色、演出（`F7`）、侧翼（`F8`）相互独立：
 
 | 布局 | 构图 |
 |---|---|
 | `ORIGINAL` | 复刻的原版面板：顶部标题、中央频谱窗、TR 网格、左右侧翼。输出与改装前逐像素一致 |
-| `FIELD` | 全幅示波场：无面板框与侧翼，频谱横贯全宽、上下对称，`TAB` 呼出原版网格 |
+| `FIELD` | 全幅示波场：宽幅频谱轮廓与峰值线，下方分列左右声道波形，`TAB` 呼出原版网格 |
 | `STACK` | 纵向三栏：左声道电平、中间频谱与波形、右侧完整 46 首列表 |
 | `RING` | 环形仪表：43 频段沿圆周放射，曲目成为外圈刻度，中心为 L/R 的 XY 图形 |
 | `CROSS` | 十字准星：四轴分区，中心菱形窗显示 XY 图形，`TAB` 呼出原版网格 |
+| `SINK` | 斜视声谱地形，前缘显示实时频谱，后方等高线保留最近三秒的扫描 |
+| `DIVE` | 三角光门和楔形频谱齿，近门显示频谱，中景记录生成时的能量 |
+| `SONO` | 每秒写入 15 行的频谱瀑布 |
+| `TRACK` | 八组频段的十六进制强度滚动谱 |
+| `DECK` | 双卷盘磁带机、七段时间显示与电平表 |
+
+STACK 的列表与 RING 的外圈支持选曲。FIELD / CROSS 可用 Tab 打开网格。F7 中央演出和 F8 侧翼在 ORIGINAL 构图可见。
 
 | 全幅场 `FIELD` | 环形 `RING` |
 |---|---|
@@ -161,3 +168,6 @@ A standalone Win32 jukebox that recreates the **SOUND MEMOIRS** screen from *Hel
 - **Web/WASM experiment:** https://vihithr.github.io/hellsinker-sound-memoirs/
 
 The interface follows the original 640×480 layout, with five themes (ORIGINAL / DARK / NEON / PAPER / BLUEPRINT), `TR` for game tracks and `LIB` for local files. See [USAGE.md](USAGE.md) for the full key map.
+## Web 主线发布
+
+桌面与 WASM 共用绘制代码。每轮涉及播放器的改动完成后，构建两端并验证；执行 `tools/sync_site.ps1`，将 Web 产物同步到仓库根目录和 `dist-static/`。将本轮改动提交并推送到 `main`，GitHub Pages 自动从该分支根目录发布。以线上 `core/core.wasm` 的 SHA-256 与本地一致作为发布验收。
