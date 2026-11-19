@@ -28,6 +28,17 @@ float channelDrive(float env,const float* wave){
     const float rms=float(std::sqrt(sum/60.0));
     return smoothstep(.02f,.78f,std::max(env*2.7f,rms*1.8f));
 }
+// Honest meter curve for the custom layouts: mix RMS with the envelope,
+// drop a 5% noise floor, compress with gamma 1.35 - no overload gain, so
+// ordinary music sits at 40..85% and only genuine peaks reach full scale.
+float calibratedMeter(float env,const float* wave){
+    double sum=0;
+    for(int i=0;i<240;i+=4){const double v=wave[i]/64.0;sum+=v*v;}
+    const float rms=float(std::sqrt(sum/60.0));
+    const float raw=std::clamp(std::max(env*0.95f,rms*1.05f),0.f,1.f);
+    const float y=std::clamp((raw-0.05f)/0.92f,0.f,1.f);
+    return std::pow(y,1.35f);
+}
 }
 void Memory::advance(const memoirs::Spectrum& s,int id,double seconds,bool playing,bool paused){
     // standby-aware animation clocks survive resets (freeze, never jump);
@@ -92,6 +103,8 @@ void Memory::advance(const memoirs::Spectrum& s,int id,double seconds,bool playi
     lastHigh=high;
     wing[0]=follow(wing[0],channelDrive(s.envL,s.waveL),dt,.030,.30);
     wing[1]=follow(wing[1],channelDrive(s.envR,s.waveR),dt,.030,.30);
+    meter[0]=follow(meter[0],calibratedMeter(s.envL,s.waveL),dt,.025,.26);
+    meter[1]=follow(meter[1],calibratedMeter(s.envR,s.waveR),dt,.025,.26);
 
     // XY auto-gain: follow the live trace peak, attack 120 ms / release 1.6 s.
     {
@@ -125,13 +138,14 @@ void Memory::advance(const memoirs::Spectrum& s,int id,double seconds,bool playi
         }
     }
 
-    // Slow per-channel peak marks for the HELIX rack rails.
+    // Slow per-channel peak marks, fed by the calibrated meter so the hold
+    // ticks jump with real peaks instead of pinning to the top.
     const float drive[2]={channelDrive(s.envL,s.waveL),channelDrive(s.envR,s.waveR)};
     for(int c=0;c<2;c++){
-        if(drive[c]>=meterPeak[c]){meterPeak[c]=drive[c];meterAge[c]=0;}
+        if(meter[c]>=meterPeak[c]){meterPeak[c]=meter[c];meterAge[c]=0;}
         else{
             meterAge[c]++;
-            if(meterAge[c]>48)meterPeak[c]=std::max(drive[c],meterPeak[c]-0.55f*dt);
+            if(meterAge[c]>48)meterPeak[c]=std::max(meter[c],meterPeak[c]-0.55f*dt);
         }
     }
 

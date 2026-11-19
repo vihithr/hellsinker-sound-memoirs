@@ -125,6 +125,23 @@ static inline bool LightTheme() {
     return GetRValue(t.panel) + GetGValue(t.panel) + GetBValue(t.panel) > 384;
 }
 
+// Contrast-boosted chassis colours for the CUSTOM layouts on light themes:
+// the ORIGINAL palette's outer/panel/strip/frame sit within a few points of
+// each other, so light themes sink the panel slightly, press the frame into
+// a crisp teal-ink line and deepen the meter strips. Dark themes unchanged.
+static inline COLORREF CustomPanelCol() {
+    const Theme& t = Th();
+    return LightTheme() ? LerpCol(t.panel, t.ink, 0.05f) : t.panel;
+}
+static inline COLORREF CustomFrameCol() {
+    const Theme& t = Th();
+    return LightTheme() ? LerpCol(t.frame, t.ink, 0.42f) : t.frame;
+}
+static inline COLORREF CustomStripCol() {
+    const Theme& t = Th();
+    return LightTheme() ? LerpCol(t.strip, t.ink, 0.32f) : t.strip;
+}
+
 // Depth fade for the custom layouts: far geometry dissolves toward the
 // recessed panel, but never fully vanishes. Dark themes cap at 0.78; light
 // themes cap at 0.58 and drift toward seam so distant lines keep a pale-ink
@@ -156,23 +173,17 @@ void panelBox(int x, int y, int r, int b, COLORREF c) {
     FillRectCol(S(x), S(y), S(r), S(b), c);
 }
 
-// Recessed instrument window: pure panel fill inside a 1px frame border.
-// Light themes get an inner hairline toward ink so the boundary stays legible
-// even where the frame hue sits close to the panel value.
+// Recessed instrument window: sunken panel fill inside a 1px chassis frame.
+// On light themes CustomPanelCol/CustomFrameCol pull the two apart so the
+// window reads as a real recess instead of a flat wash.
 static void InsetPanel(int x, int y, int r, int b) {
-    const Theme& t = Th();
-    FillRectCol(S(x), S(y), S(r), S(b), t.panel);
-    FillRectCol(S(x), S(y), S(r), S(y + 1), t.frame);
-    FillRectCol(S(x), S(b - 1), S(r), S(b), t.frame);
-    FillRectCol(S(x), S(y), S(x + 1), S(b), t.frame);
-    FillRectCol(S(r - 1), S(y), S(r), S(b), t.frame);
-    if (LightTheme()) {
-        const COLORREF inner = LerpCol(t.frame, t.ink, 0.25f);
-        FillRectCol(S(x + 1), S(y + 1), S(r - 1), S(y + 2), inner);
-        FillRectCol(S(x + 1), S(b - 2), S(r - 1), S(b - 1), inner);
-        FillRectCol(S(x + 1), S(y + 1), S(x + 2), S(b - 1), inner);
-        FillRectCol(S(r - 2), S(y + 1), S(r - 1), S(b - 1), inner);
-    }
+    const COLORREF panel = CustomPanelCol();
+    const COLORREF frame = CustomFrameCol();
+    FillRectCol(S(x), S(y), S(r), S(b), panel);
+    FillRectCol(S(x), S(y), S(r), S(y + 1), frame);
+    FillRectCol(S(x), S(b - 1), S(r), S(b), frame);
+    FillRectCol(S(x), S(y), S(x + 1), S(b), frame);
+    FillRectCol(S(r - 1), S(y), S(r), S(b), frame);
 }
 
 // ---- Unicode text helpers (SYS / LIB shell pages) -------------------------
@@ -308,10 +319,8 @@ static void PaintClipLed(int x, int y, int side) {
 // (exact glyph-box origin) so nothing straddles a rule or chews a frame.
 void PaintCustomHeader(const char* layoutCode) {
     const Theme& t = Th();
-    FillRectCol(0, 0, S(kLogicalW), S(28), t.panel);
-    FillRectCol(0, S(27), S(kLogicalW), S(28), t.frame);
-    if (LightTheme())
-        FillRectCol(0, S(26), S(kLogicalW), S(27), LerpCol(t.frame, t.ink, 0.25f));
+    FillRectCol(0, 0, S(kLogicalW), S(28), CustomPanelCol());
+    FillRectCol(0, S(27), S(kLogicalW), S(28), CustomFrameCol());
     // machine plate: 3px signal block + heavy title + composition code
     FillRectCol(S(12), S(8), S(15), S(20), t.bar);
     DrawCellsTL("SOUND MEMOIRS", 22, 9, 0);
@@ -330,10 +339,8 @@ void PaintCustomHeader(const char* layoutCode) {
 
 void PaintCustomFooter(bool showGridHint) {
     const Theme& t = Th();
-    FillRectCol(0, S(452), S(kLogicalW), S(kLogicalH), t.panel);
-    FillRectCol(0, S(452), S(kLogicalW), S(453), t.frame);
-    if (LightTheme())
-        FillRectCol(0, S(453), S(kLogicalW), S(454), LerpCol(t.frame, t.ink, 0.25f));
+    FillRectCol(0, S(452), S(kLogicalW), S(kLogicalH), CustomPanelCol());
+    FillRectCol(0, S(452), S(kLogicalW), S(453), CustomFrameCol());
     // full-width seek rail: y 454..456, playhead 453..457 (never reaches text)
     FillRectCol(S(16), S(454), S(624), S(456), t.seam);
     const int end = 16 + int(608 * PlayProgress());
@@ -774,12 +781,12 @@ void PaintStackLayout() {
     const int mBot = 420;                            // 60 cells of 6px
     for (int side = 0; side < 2; ++side) {
         const int x1 = side ? 48 : 18, x2 = x1 + 14;
-        const float drive = std::clamp((side ? g_state->spectrum.envR : g_state->spectrum.envL) * 2.2f, 0.f, 1.f);
+        const float drive = g_mem ? g_mem->meter[side] : 0.f;
         const int n = std::clamp(int(drive * 60.0f), 0, 60);
         for (int i = 0; i < n; ++i) {
             const int y2 = mBot - i * 6;
             FillRectCol(S(x1), S(y2 - 5), S(x2), S(y2),
-                        i > 44 ? t.accentHot : t.strip);
+                        i > 44 ? t.accentHot : CustomStripCol());
         }
         for (int i = n; i < 60; i += 6) {
             const int y2 = mBot - i * 6;
@@ -1025,12 +1032,12 @@ void PaintRingLayout() {
     // bottom-left: compact 8px twin vertical meters with peak-hold ticks
     for (int side = 0; side < 2; ++side) {
         const int x = 24 + side * 14;
-        const float drive = std::clamp(g_state->wing[side], 0.f, 1.f);
+        const float drive = g_mem ? g_mem->meter[side] : 0.f;
         const int n = int(drive * 26);
         for (int i = 0; i < n; ++i) {
             const int y = 428 - i * 6;
             FillRectCol(S(x), S(y - 4), S(x + 8), S(y),
-                        i > 19 ? t.accentHot : t.strip);
+                        i > 19 ? t.accentHot : CustomStripCol());
         }
         if (g_mem && g_mem->meterPeak[side] > 0.02f) {
             const int py = 428 - int(g_mem->meterPeak[side] * 156.f);
@@ -1194,10 +1201,10 @@ void PaintCrossLayout() {
         // horizontal L/R level bars with hard peak-hold ticks + CLIP lamps
         for (int side = 0; side < 2; ++side) {
             const int y = 396 + side * 20;
-            const float drive = std::clamp(g_state->wing[side], 0.f, 1.f);
+            const float drive = g_mem ? g_mem->meter[side] : 0.f;
             FillRectCol(S(px + 24), S(y), S(576), S(y + 6), LerpCol(t.seam, t.outer, 0.30f));
             const int w = int(drive * 120.f);
-            if (w > 0) FillRectCol(S(px + 24), S(y), S(px + 24 + w), S(y + 6), t.strip);
+            if (w > 0) FillRectCol(S(px + 24), S(y), S(px + 24 + w), S(y + 6), CustomStripCol());
             if (g_mem && g_mem->meterPeak[side] > 0.02f) {
                 const int pxx = px + 24 + int(g_mem->meterPeak[side] * 120.f);
                 FillRectCol(S(pxx), S(y - 2), S(pxx + 2), S(y + 8), t.accentHot);
@@ -1361,11 +1368,11 @@ void PaintHelixLayout() {
         DrawCells(db, 56, 414, 3);
         // compact L channel meter beside the gauge
         const int mx = 126, mBot = 400;
-        const float drive = std::clamp(g_state->wing[0], 0.f, 1.f);
+        const float drive = g_mem ? g_mem->meter[0] : 0.f;
         const int n = int(drive * 40);
         for (int i = 0; i < n; ++i) {
             const int y = mBot - i * 8;
-            FillRectCol(S(mx), S(y - 6), S(mx + 12), S(y), i > 30 ? t.accentHot : t.strip);
+            FillRectCol(S(mx), S(y - 6), S(mx + 12), S(y), i > 30 ? t.accentHot : CustomStripCol());
         }
         if (g_mem && g_mem->meterPeak[0] > 0.02f) {
             const int py = mBot - int(g_mem->meterPeak[0] * 320.f);
@@ -1377,11 +1384,11 @@ void PaintHelixLayout() {
     // ---- right bay: R meter + LOW ladder + order (x 484..616) -------------
     {
         const int mx = 490, mBot = 400;
-        const float drive = std::clamp(g_state->wing[1], 0.f, 1.f);
+        const float drive = g_mem ? g_mem->meter[1] : 0.f;
         const int n = int(drive * 40);
         for (int i = 0; i < n; ++i) {
             const int y = mBot - i * 8;
-            FillRectCol(S(mx), S(y - 6), S(mx + 12), S(y), i > 30 ? t.accentHot : t.strip);
+            FillRectCol(S(mx), S(y - 6), S(mx + 12), S(y), i > 30 ? t.accentHot : CustomStripCol());
         }
         if (g_mem && g_mem->meterPeak[1] > 0.02f) {
             const int py = mBot - int(g_mem->meterPeak[1] * 320.f);
@@ -1645,11 +1652,11 @@ void PaintSonoLayout() {
         const bool clip = g_mem && g_mem->clipHold[side] > 0.f;
         FillRectCol(S(x + 4), S(78), S(x + 10), S(84), t.frame);
         FillRectCol(S(x + 5), S(79), S(x + 9), S(83), clip ? t.accentHot : t.seam);
-        const float drive = std::clamp(g_state->wing[side], 0.f, 1.f);
+        const float drive = g_mem ? g_mem->meter[side] : 0.f;
         const int n = int(drive * 33);
         for (int i = 0; i < n; ++i) {
             const int y = 288 - i * 6;
-            FillRectCol(S(x), S(y - 4), S(x + 14), S(y), i > 25 ? t.accentHot : t.strip);
+            FillRectCol(S(x), S(y - 4), S(x + 14), S(y), i > 25 ? t.accentHot : CustomStripCol());
         }
         if (g_mem && g_mem->meterPeak[side] > 0.02f) {
             const int py = 288 - int(g_mem->meterPeak[side] * 198.f);
@@ -1887,11 +1894,11 @@ void PaintDeckLayout() {
     InsetPanel(16, 248, 624, 342);
     for (int side = 0; side < 2; ++side) {
         const int y = side ? 286 : 258;
-        const float drive = std::clamp(g_state->wing[side], 0.f, 1.f);
+        const float drive = g_mem ? g_mem->meter[side] : 0.f;
         const int n = int(drive * 48.f);
         for (int i = 0; i < 48; ++i) {
             const int x = 56 + i * 10;
-            const COLORREF c = i < n ? (i < 36 ? t.strip : t.accentHot) : ghost;
+            const COLORREF c = i < n ? (i < 36 ? CustomStripCol() : t.accentHot) : ghost;
             FillRectCol(S(x), S(y), S(x + 8), S(y + 8), c);
         }
         if (g_mem && g_mem->meterPeak[side] > 0.02f) {

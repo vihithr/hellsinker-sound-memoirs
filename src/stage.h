@@ -26,6 +26,10 @@ struct Memory {
     // 140 ms. Piano / cymbals / strings with weak lows still flash the ticks.
     float highSpark=0, highFloor=0, lastHigh=0;
     float wing[2]{};
+    // Calibrated L/R level for the CUSTOM layouts' meters (no 2.7x overload
+    // gain): normal music dances at 40..85%, only real peaks hit the top.
+    // wing[] keeps its old hot curve for the original side wings.
+    float meter[2]{};
     // Slow auto-gain for the XY phase figures: tracks the recent peak with a
     // fast attack / slow release so quiet passages expand instead of sitting
     // in a ball at the centre, and one loud spike cannot squash what follows.
