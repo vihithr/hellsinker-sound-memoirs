@@ -1330,20 +1330,22 @@ void PaintDiveLayout() {
             : LerpCol(t.wave, t.panel, std::min(0.8f, depth * 0.8f));
         const COLORREF strandB = depth < 0.22f ? LerpCol(t.bar, t.wave, 0.4f)
             : LerpCol(LerpCol(t.wave, t.bar, 0.45f), t.panel, std::min(0.8f, depth * 0.8f));
-        const COLORREF rungC = LerpCol(t.barLit, t.panel, std::min(0.7f, depth * 0.7f));
+        // rungs are the bright base-pair bonds: hot color, barely dimmed
+        const COLORREF rungC = LerpCol(t.stripHot, t.panel, std::min(0.3f, depth * 0.3f));
         const int w = depth < 0.4f ? 1 : depth < 0.75f ? 2 : 3;
-        // helix swing: that moment's drive sets the width, the signed wave
-        // sample biases the winding phase so the shape follows the waveform
-        const float amp = F.half * (0.04f + 0.10f * F.drive);
+        // helix swing: tight around the edge line; drive still sets the width
+        const float amp = F.half * (0.025f + 0.06f * F.drive);
         const float bias = wave(F.age, 0) * 1.2f;
         const float ca = cosf(F.ang), sa = sinf(F.ang);
         auto pt = [&](float lx, float ly) -> GfxPoint {
             return { (std::int16_t)S(cx + int(lx * ca - ly * sa)),
                      (std::int16_t)S(cy + int(lx * sa + ly * ca)) };
         };
-        // the four # edges: two horizontal at y=+-half/3, two vertical at
-        // x=+-half/3, each spanning +-half along its direction
-        const float off = F.half * 0.34f;
+        // the four # edges at +-0.46*half (large centre hole). Each edge
+        // line runs far past the screen so the helices always reach off-frame.
+        const float off = F.half * 0.46f;
+        const float reach = std::max(F.half * 1.6f, 560.f);
+        const int ES = 48;                     // samples along the long edge
         for (int e = 0; e < 4; ++e) {
             const bool horiz = e < 2;
             const float eo = (e % 2) ? off : -off;
@@ -1351,31 +1353,37 @@ void PaintDiveLayout() {
             auto edgePt = [&](float p, float q) -> GfxPoint {
                 return horiz ? pt(p, eo + q) : pt(eo + q, p);
             };
-            // cross rungs under the strands
-            for (int i = 0; i <= SEG; i += 4) {
-                const float p = -F.half + 2.f * F.half * i / SEG;
-                const float h = amp * sinf(2.f * kPi * 1.5f * i / SEG + bias + e * 0.7f);
+            // base-pair bonds every 3rd sample: dense and bright
+            for (int i = 0; i <= ES; i += 3) {
+                const float p = -reach + 2.f * reach * i / ES;
+                const float h = amp * sinf(2.f * kPi * 2.5f * i / ES + bias + e * 0.7f);
                 GfxPoint seg[2] = { edgePt(p, h), edgePt(p, -h) };
                 gfx_polyline(seg, 2, rungC, 1);
             }
             // the two strands winding around the edge line
-            GfxPoint sA[29], sB[29];
-            for (int i = 0; i <= SEG; ++i) {
-                const float p = -F.half + 2.f * F.half * i / SEG;
-                const float h = amp * sinf(2.f * kPi * 1.5f * i / SEG + bias + e * 0.7f);
+            GfxPoint sA[49], sB[49];
+            for (int i = 0; i <= ES; ++i) {
+                const float p = -reach + 2.f * reach * i / ES;
+                const float h = amp * sinf(2.f * kPi * 2.5f * i / ES + bias + e * 0.7f);
                 sA[i] = edgePt(p, h);
                 sB[i] = edgePt(p, -h);
             }
-            gfx_polyline(sA, SEG + 1, strandA, w);
-            gfx_polyline(sB, SEG + 1, strandB, w);
+            gfx_polyline(sA, ES + 1, strandA, w);
+            gfx_polyline(sB, ES + 1, strandB, w);
         }
-        // four bright plane markers at the edge midpoints
-        const COLORREF mark = depth < 0.5f ? t.stripHot : LerpCol(t.stripHot, t.panel, 0.4f);
-        const GfxPoint marks[4] = { pt(0, -off), pt(0, off), pt(-off, 0), pt(off, 0) };
-        for (int c = 0; c < 4; ++c) {
-            const int ms = depth < 0.5f ? 2 : 3;
-            FillRectCol(marks[c].x - ms, marks[c].y - ms,
-                        marks[c].x + ms + 1, marks[c].y + ms + 1, mark);
+        // aviation-style obstruction lights at the four # corners: they
+        // blink on a slow cycle, each layer offset, marking the plane's depth
+        const bool lit = ((g_state->tick / 24 + k) % 3) != 0;
+        if (lit) {
+            const COLORREF mark = depth < 0.5f ? t.stripHot
+                : LerpCol(t.stripHot, t.panel, 0.35f);
+            const GfxPoint corners[4] = { pt(-off, -off), pt(off, -off),
+                                          pt(-off, off), pt(off, off) };
+            for (int c = 0; c < 4; ++c) {
+                const int ms = depth < 0.5f ? 2 : 3;
+                FillRectCol(corners[c].x - ms, corners[c].y - ms,
+                            corners[c].x + ms + 1, corners[c].y + ms + 1, mark);
+            }
         }
     }
 
