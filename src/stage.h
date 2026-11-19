@@ -22,6 +22,9 @@ struct Memory {
     std::array<std::array<float,43>,24> ridges{};
     std::array<std::array<GfxPoint,120>,6> traces{};
     float lowSustain=0, impact=0, lowFloor=0, lastLow=0;
+    // High-frequency transient (bands 28..42): sharp attack 15 ms, release
+    // 140 ms. Piano / cymbals / strings with weak lows still flash the ticks.
+    float highSpark=0, highFloor=0, lastHigh=0;
     float wing[2]{};
     // Slow auto-gain for the XY phase figures: tracks the recent peak with a
     // fast attack / slow release so quiet passages expand instead of sitting
@@ -45,6 +48,12 @@ struct Memory {
     // the crossing rate, amplitude the swing), so the strands keep twisting
     // even when a window mean cancels out.
     float windL=0, windR=0;
+    // DIVE: frozen birth snapshot per layer (drive / high spark / winding
+    // phase), keyed by the layer's birth index. A layer keeps its birth
+    // imprint from spawn to screen exit, independent of the 8 Hz history.
+    static constexpr int kDiveSlots=16;
+    int diveLastBase=-1;
+    float diveDrive[kDiveSlots]{}, diveSpark[kDiveSlots]{}, divePhase[kDiveSlots]{};
     int head=0, trace=0, samples=0;
     double last=-1;
     double motion=-1;

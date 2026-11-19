@@ -48,6 +48,13 @@ void Memory::advance(const memoirs::Spectrum& s,int id,double seconds,bool playi
     const float attack=std::max(0.f,low-lowFloor)*1.55f+std::max(0.f,low-lastLow)*.85f;
     impact=follow(impact,std::clamp(attack,0.f,1.f),dt,.022,.24);
     lastLow=low;
+    float high=0;
+    for(int i=28;i<=42;++i)high+=std::clamp(s.barsLevel[i]/96.f,0.f,1.f);
+    high/=15.f;
+    highFloor=follow(highFloor,high,dt,.14,.80);
+    const float hAttack=std::max(0.f,high-highFloor)*1.8f+std::max(0.f,high-lastHigh)*1.0f;
+    highSpark=follow(highSpark,std::clamp(hAttack,0.f,1.f),dt,.015,.14);
+    lastHigh=high;
     wing[0]=follow(wing[0],channelDrive(s.envL,s.waveL),dt,.030,.30);
     wing[1]=follow(wing[1],channelDrive(s.envR,s.waveR),dt,.030,.30);
 
@@ -81,16 +88,35 @@ void Memory::advance(const memoirs::Spectrum& s,int id,double seconds,bool playi
         histL[histHead]=drive[0];
         histR[histHead]=drive[1];
         histBeat[histHead]=attack>0.30f?1:0;
-        float wl=0,wr=0;
-        for(int i=0;i<240;i+=8){wl+=s.waveL[i];wr+=s.waveR[i];}
-        // winding phase: the signed wave steers a continuous rotation, so a
-        // high tone winds fast, silence holds still, and the mean can never
-        // collapse the helix into a straight line
-        windL+=std::clamp(wl/30.f/64.f,-1.f,1.f)*2.4f+.35f;
-        windR+=std::clamp(wr/30.f/64.f,-1.f,1.f)*2.4f+.35f;
+        // Winding phase from drive energy + zero-crossing density: a window
+        // mean of AC audio cancels to zero (the old idle-spin bug), while the
+        // crossing rate tracks pitch. Silence freezes the phase completely.
+        int zcL=0,zcR=0;
+        for(int i=1;i<240;i++){
+            if((s.waveL[i-1]<0)!=(s.waveL[i]<0))++zcL;
+            if((s.waveR[i-1]<0)!=(s.waveR[i]<0))++zcR;
+        }
+        const float znL=std::clamp(zcL/120.f,0.f,1.f), znR=std::clamp(zcR/120.f,0.f,1.f);
+        const float stepL=drive[0]<0.02f?0.f:drive[0]*(0.28f+0.95f*znL);
+        const float stepR=drive[1]<0.02f?0.f:drive[1]*(0.28f+0.95f*znR);
+        windL+=stepL;
+        windR+=stepR;
         // antiphase pair: the two strands always cross into the # lattice
         histWaveL[histHead]=std::sin(windL);
         histWaveR[histHead]=-std::sin(windR);
+    }
+
+    // DIVE: freeze a birth snapshot whenever a new layer spawns (0.32/s,
+    // synced with the painter). Ring of 16 slots keyed by birth index.
+    {
+        const int b=int(std::floor(seconds*0.32));
+        if(b>diveLastBase){
+            diveLastBase=b;
+            const int slot=b%kDiveSlots;
+            diveDrive[slot]=std::clamp((wing[0]+wing[1])*0.5f,0.f,1.f);
+            diveSpark[slot]=highSpark;
+            divePhase[slot]=windL;
+        }
     }
 
     if(last>=0 && seconds>=last && seconds-last<.045)return;
@@ -196,13 +222,15 @@ void phase(Paper p,const Palette& c,const Memory& m){
     }
     p.fill(x-1,y-1,3,3,c.accent);
 }
-void calibration(Paper p,const Palette& c){
-    const C dot=mix(c.field,c.grid,.32);
-    const C guide=mix(c.field,c.grid,.13);
-    for(int x=172;x<484;x+=48)p.rule(x,88,x,228,guide);
-    for(int y=92;y<232;y+=32)p.rule(158,y,482,y,guide);
-    for(int y=88;y<232;y+=12)
-        for(int x=156;x<484;x+=12)p.fill(x,y,1,1,dot);
+void calibration(Paper p,const Palette& c,bool drawInnerGrid){
+    if(drawInnerGrid){
+        const C dot=mix(c.field,c.grid,.32);
+        const C guide=mix(c.field,c.grid,.13);
+        for(int x=172;x<484;x+=48)p.rule(x,88,x,228,guide);
+        for(int y=92;y<232;y+=32)p.rule(158,y,482,y,guide);
+        for(int y=88;y<232;y+=12)
+            for(int x=156;x<484;x+=12)p.fill(x,y,1,1,dot);
+    }
 
     const C rail=mix(c.field,c.grid,.62);
     p.rule(154,84,154,232,rail);
@@ -233,7 +261,9 @@ void paint(const Palette& c,float scale,int mode,const memoirs::Spectrum& s,cons
     auto S=[&](int v){return (int)(v*scale+0.5f);};
     gfx_push_clip(S(148),S(80),S(492),S(238));
     Paper p{scale};p.fill(148,80,344,158,c.field);
-    calibration(p,c);
+    // Phase draws its own 19 px scope grid: skip the calibration dot grid so
+    // the two grids never moire over each other (frame + ticks stay).
+    calibration(p,c,mode!=3);
     if(mode==1)eclipse(p,c,s,m);else if(mode==2)strata(p,c,m);else phase(p,c,m);
     p.fill(148,236,344,2,c.frame);
     gfx_pop_clip();

@@ -740,6 +740,11 @@ void PaintStackLayout() {
                         LerpCol(t.seam, t.outer, 0.35f));
         }
         DrawCells(side ? "R" : "L", x1 + 1, 446, 2);
+        // hard-edge peak-hold tick (0.8 s hold, then slow fall)
+        if (g_mem && g_mem->meterPeak[side] > 0.02f) {
+            const int py = 440 - int(g_mem->meterPeak[side] * 360.f);
+            FillRectCol(S(x1), S(py - 2), S(x2), S(py), t.accentHot);
+        }
     }
 
     // centre display
@@ -1270,6 +1275,11 @@ void PaintHelixLayout() {
             FillRectCol(S(x), S(y - 4), S(x + 12), S(y), i > 18 ? t.accentHot : t.strip);
         }
         DrawCells(side ? "R" : "L", x + 2, 310, 2);
+        // hard-edge peak-hold tick over the meter column
+        if (g_mem && g_mem->meterPeak[side] > 0.02f) {
+            const int py = 300 - int(g_mem->meterPeak[side] * 144.f);
+            FillRectCol(S(x), S(py - 2), S(x + 12), S(py), t.accentHot);
+        }
     }
     {
         const int lx = 470, ly = 336;
@@ -1325,25 +1335,24 @@ void PaintDiveLayout() {
     const bool active = g_state->current >= 0;
     const int cx = 320, cy = 240;
     const int K = 6;                       // layers in flight: continuous stream
-    const int H = stage::Memory::kHist;
-    const int SEG = 28;                    // samples along each edge
+    const int DS = stage::Memory::kDiveSlots;
 
-    // fall phase: strictly uniform - one layer born every ~1.4 s. Growth is
+    // fall phase: strictly uniform - one layer born every 1/0.32 s. Growth is
     // true perspective (below), so a layer is already far off-screen before
     // its slot recycles: the stream reads as one layer passing after another.
-    const double f = active ? g_state->seconds * 0.42 : 0.35;
+    const double f = active ? g_state->seconds * 0.32 : 0.35;
     const int base = int(std::floor(f));
     const float frac = float(f - base);
 
-    auto hist = [&](int age, int side) -> float {
-        if (!g_mem || age < 0 || age >= H) return 0.f;
-        const int idx = (g_mem->histHead - age + H * 4) % H;
-        return side ? g_mem->histR[idx] : g_mem->histL[idx];
+    // birth snapshots: frozen drive / phase per layer, indexed by birth
+    // number - never scrolls with the 8 Hz history, never ages out.
+    auto snapDrive = [&](int age) -> float {
+        if (!g_mem || age < 0) return 0.f;
+        return g_mem->diveDrive[((age % DS) + DS) % DS];
     };
-    auto wave = [&](int age, int side) -> float {
-        if (!g_mem || age < 0 || age >= H) return 0.f;
-        const int idx = (g_mem->histHead - age + H * 4) % H;
-        return side ? g_mem->histWaveR[idx] : g_mem->histWaveL[idx];
+    auto snapPhase = [&](int age) -> float {
+        if (!g_mem || age < 0) return 0.f;
+        return g_mem->divePhase[((age % DS) + DS) % DS];
     };
 
     struct Frame { float half; float ang; float u; int age; float drive; };
@@ -1359,7 +1368,7 @@ void PaintDiveLayout() {
         // past the frame so its rail endpoint is far off-screen, not snapped.
         const float z = std::max(0.008f, 1.f - u);
         fr[k].half = std::min(6000.f, 13.f / z);
-        fr[k].drive = std::clamp((hist(age, 0) + hist(age, 1)) * 0.5f, 0.f, 1.f);
+        fr[k].drive = std::clamp(snapDrive(age), 0.f, 1.f);
         fr[k].ang = age * 0.5f + (active ? float(g_state->seconds) * 0.55f : 0.f);
     }
 
@@ -1419,7 +1428,7 @@ void PaintDiveLayout() {
         const int w = 1;                             // hairline strands always
         // helix swing: tight around the edge line; drive still sets the width
         const float amp = F.half * (0.03f + 0.07f * F.drive);
-        const float bias = wave(F.age, 0) * 1.2f;
+        const float bias = snapPhase(F.age);
         const float ca = cosf(F.ang), sa = sinf(F.ang);
         auto pt = [&](float lx, float ly) -> GfxPoint {
             return { (std::int16_t)S(cx + int(lx * ca - ly * sa)),
