@@ -1871,6 +1871,170 @@ void PaintTrackLayout() {
     PaintCustomFooter(false);
 }
 
+// ---- 7-segment VFD digit (hard rectangles, unlit ghost segments) ----------
+static void Draw7Seg(int x, int y, int digit, COLORREF lit, COLORREF unlit) {
+    // 18x34 digit, 3px segment thickness: a b c d e f g
+    static const unsigned char map[10] = {
+        0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07, 0x7F, 0x6F
+    };
+    const unsigned char m = digit >= 0 && digit <= 9 ? map[digit] : 0;
+    auto seg = [&](int sx, int sy, int sw, int sh, int bit) {
+        FillRectCol(S(sx), S(sy), S(sx + sw), S(sy + sh), (m >> bit) & 1 ? lit : unlit);
+    };
+    seg(x + 3, y,      12, 3, 0);   // a
+    seg(x + 15, y + 3,  3, 13, 1);  // b
+    seg(x + 15, y + 18, 3, 13, 2);  // c
+    seg(x + 3, y + 31, 12, 3, 3);   // d
+    seg(x,     y + 18, 3, 13, 4);   // e
+    seg(x,     y + 3,  3, 13, 5);   // f
+    seg(x + 3, y + 16, 12, 3, 6);   // g
+}
+
+// ---- composition: DECK, cassette / DAT hardware faceplate ------------------
+// Linked tape reels (left shrinks / right grows with real progress), a VFD
+// 7-segment timecode window, broadcast PPM meters with clip latches and a
+// compact VFD spectrum. Reels spin on the standby-aware deck clock.
+void PaintDeckLayout() {
+    const Theme& t = Th();
+    const float kPi = 3.14159265f;
+    FillRectCol(0, 0, S(kLogicalW), S(kLogicalH), t.outer);
+    const COLORREF ghost = LerpCol(t.panel, t.seam, 0.45f);
+    const float p = float(PlayProgress());
+    const float imp = Impact();
+
+    // ---- cassette bay -------------------------------------------------------
+    InsetPanel(16, 34, 624, 244);
+    const int ly = 138, lx = 166, rx = 474;
+    const int rL = 56 - int(22 * p), rR = 34 + int(22 * p);
+    const COLORREF tape = LerpCol(t.panel, t.ink, 0.18f);
+    const COLORREF tapeLine = LerpCol(t.panel, t.ink, 0.32f);
+    auto circle = [&](int cx, int cy, int r, COLORREF c, int w) {
+        GfxPoint pts[49];
+        for (int i = 0; i <= 48; ++i) {
+            const float a = 2.f * kPi * i / 48;
+            pts[i] = { (std::int16_t)S(cx + int(r * cosf(a))),
+                       (std::int16_t)S(cy + int(r * sinf(a))) };
+        }
+        gfx_polyline(pts, 49, c, w);
+    };
+    const double spin = g_mem ? g_mem->deckClock : 0.0;
+    for (int side = 0; side < 2; ++side) {
+        const int cx = side ? rx : lx, r = side ? rR : rL;
+        gfx_ellipse(S(cx - r), S(ly - r), S(cx + r + 1), S(ly + r + 1), tape);
+        circle(cx, ly, r, t.frame, S(1));
+        for (int rr = r - 8; rr > 22; rr -= 8) circle(cx, ly, rr, tapeLine, S(1));
+        // drive hub: 20px, three hard spokes on the uniform deck clock
+        gfx_ellipse(S(cx - 20), S(ly - 20), S(cx + 21), S(ly + 21), t.panel);
+        circle(cx, ly, 20, t.frame, S(1));
+        for (int i = 0; i < 3; ++i) {
+            const float a = float(spin) + i * 2.f * kPi / 3.f;
+            GfxPoint spoke[2] = {
+                { (std::int16_t)S(cx), (std::int16_t)S(ly) },
+                { (std::int16_t)S(cx + int(17 * cosf(a))), (std::int16_t)S(ly + int(17 * sinf(a))) } };
+            gfx_polyline(spoke, 2, t.frame, S(3));
+        }
+        FillRectCol(S(cx - 2), S(ly - 2), S(cx + 3), S(ly + 3), t.bar);
+    }
+    // tape path: bottom tangents -> guide rollers -> tension arm (beat bounce)
+    {
+        const int bounce = int(imp * 4.f);
+        GfxPoint path[5] = {
+            { (std::int16_t)S(lx), (std::int16_t)S(ly + rL) },
+            { (std::int16_t)S(220), (std::int16_t)S(212) },
+            { (std::int16_t)S(320), (std::int16_t)S(212 + bounce) },
+            { (std::int16_t)S(420), (std::int16_t)S(212) },
+            { (std::int16_t)S(rx), (std::int16_t)S(ly + rR) } };
+        gfx_polyline(path, 5, LerpCol(t.panel, t.ink, 0.55f), S(2));
+        for (int gx : { 220, 420 }) {
+            FillRectCol(S(gx - 3), S(209), S(gx + 4), S(216), t.frame);
+            FillRectCol(S(gx - 1), S(211), S(gx + 2), S(214), t.panel);
+        }
+        FillRectCol(S(317), S(209 + bounce), S(324), S(216 + bounce), t.frame);
+        FillRectCol(S(319), S(211 + bounce), S(322), S(214 + bounce), t.panel);
+    }
+    // ---- VFD timecode window ------------------------------------------------
+    InsetPanel(248, 76, 392, 198);
+    DrawCells("DIGITAL AUDIO", 268, 82, 2);
+    {
+        const int secs = std::max(0, int(g_state->seconds));
+        const int mm = (secs / 60) % 100, ss = secs % 60;
+        const int dx[4] = { 262, 286, 322, 346 };
+        const int dv[4] = { mm / 10, mm % 10, ss / 10, ss % 10 };
+        for (int i = 0; i < 4; ++i) Draw7Seg(dx[i], 104, dv[i], t.bar, ghost);
+        const bool colon = (g_state->tick % 60) < 30;
+        const COLORREF cc = colon ? t.bar : ghost;
+        FillRectCol(S(310), S(114), S(313), S(117), cc);
+        FillRectCol(S(310), S(125), S(313), S(128), cc);
+    }
+    {
+        char b[16];
+        snprintf(b, sizeof(b), "TR:%02d", std::max(0, g_state->current));
+        DrawCells(b, 256, 150, g_state->current >= 0 ? 0 : 2);
+        static const char* orders[4] = { "ORDER", "ONE", "LOOP", "SHUFFLE" };
+        const char* ow = orders[g_state->localOrder % 4];
+        DrawCells(ow, 384 - (int)strlen(ow) * 8, 150, 2);
+        DrawCells(TransportWord(), 256, 170, g_state->current >= 0 && !g_state->libPaused ? 0 : 2);
+    }
+
+    // ---- broadcast PPM meters ------------------------------------------------
+    InsetPanel(16, 252, 624, 336);
+    for (int side = 0; side < 2; ++side) {
+        const int y = side ? 286 : 266;
+        const float drive = std::clamp(g_state->wing[side], 0.f, 1.f);
+        const int n = int(drive * 50.f);
+        for (int i = 0; i < 50; ++i) {
+            const int x = 56 + i * 10;
+            const COLORREF c = i < n ? (i < 38 ? t.strip : t.accentHot) : ghost;
+            FillRectCol(S(x), S(y), S(x + 8), S(y + 8), c);
+        }
+        if (g_mem && g_mem->meterPeak[side] > 0.02f) {
+            const int px = 56 + std::min(49, int(g_mem->meterPeak[side] * 50.f)) * 10;
+            FillRectCol(S(px), S(y - 2), S(px + 8), S(y), t.accentHot);
+        }
+        DrawCells(side ? "R" : "L", 30, y - 1, 2);
+        PaintClipLamp(570, y - 2, side, 40);
+    }
+    // dB scale printed in the gutter between the two meters
+    {
+        static const int db[7] = { -30, -20, -12, -6, -3, 0, 3 };
+        for (int i = 0; i < 7; ++i) {
+            const int cell = (db[i] + 30) * 50 / 33;
+            const int x = 56 + std::min(49, cell) * 10;
+            char b[8];
+            snprintf(b, sizeof(b), "%d", db[i]);
+            DrawCells(b, x, 277, 2);
+        }
+    }
+    PaintCorrelationBar(272, 322, 96);
+
+    // ---- compact VFD spectrum -------------------------------------------------
+    InsetPanel(16, 344, 624, 446);
+    {
+        const int baseY = 440, maxH = 82;
+        const int pitch = 14, barW = 12;
+        const int x0 = (kLogicalW - 43 * pitch) / 2;
+        for (int k = 0; k < 43; ++k) {
+            const int x1 = x0 + k * pitch, x2 = x1 + barW;
+            const int up = int(Lv(k) * maxH);
+            const int prevUp = int(stage::bandLevel(g_state->spectrum.barsPrev[k]) * maxH);
+            for (int y = baseY - maxH; y < baseY - prevUp; y += 3)
+                FillRectCol(S(x1), S(y), S(x2), S(std::min(y + 2, baseY - prevUp)), ghost);
+            for (int y = baseY - up; y < baseY; y += 3)
+                FillRectCol(S(x1), S(y), S(x2), S(std::min(y + 2, baseY)), t.bar);
+            for (int y = baseY - prevUp; y < baseY - up; y += 3)
+                FillRectCol(S(x1), S(y), S(x2), S(std::min(y + 2, baseY - up)), t.barLit);
+        }
+        if (imp > 0.08f)
+            FillRectCol(S(x0), S(baseY), S(x0 + 43 * pitch), S(baseY + 3), t.accentHot);
+        else
+            FillRectCol(S(x0), S(baseY), S(x0 + 43 * pitch), S(baseY + 1),
+                        LerpCol(t.frame, t.panel, 0.35f));
+    }
+
+    PaintCustomHeader("DECK / 09");
+    PaintCustomFooter(false);
+}
+
 // ---- channel rail ---------------------------------------------------------
 // The page rail stays visible while the user is around and fades out after
 // 150 idle frames. While fading the pre-rail background is blended back
@@ -2107,6 +2271,7 @@ void sceneRender(const SceneState& s, float scale, const stage::Memory& memory,
         if (layoutMode == layout::Dive) { PaintDiveLayout(); return; }
         if (layoutMode == layout::Sono) { PaintSonoLayout(); return; }
         if (layoutMode == layout::Track) { PaintTrackLayout(); return; }
+        if (layoutMode == layout::Deck) { PaintDeckLayout(); return; }
     }
 
     const int mode = s.stageMode;

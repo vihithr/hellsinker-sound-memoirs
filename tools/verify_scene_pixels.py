@@ -160,6 +160,17 @@ for i in range(n):
                 from PIL import ImageChops
                 mask = ImageChops.logical_and(mask, clipmask)
             img.paste(Image.new("RGB", (640, 480), color), (0, 0), mask)
+    elif op == 7:    # ELLIPSE (solid fill)
+        cx0, cy0, cx1, cy1 = clip_stack[-1]
+        mask = Image.new("1", (640, 480), 0)
+        ImageDraw.Draw(mask).ellipse([x0, y0, x1 - 1, y1 - 1], fill=1)
+        if (cx0, cy0, cx1, cy1) != (0, 0, 640, 480):
+            clipmask = Image.new("1", (640, 480), 0)
+            ImageDraw.Draw(clipmask).rectangle(
+                [max(0, cx0), max(0, cy0), min(640, cx1) - 1, min(480, cy1) - 1], fill=1)
+            from PIL import ImageChops
+            mask = ImageChops.logical_and(mask, clipmask)
+        img.paste(Image.new("RGB", (640, 480), color), (0, 0), mask)
     elif op == 9:    # PUSH_CLIP
         cx0, cy0, cx1, cy1 = clip_stack[-1]
         clip_stack.append((max(cx0, x0), max(cy0, y0), min(cx1, x1), min(cy1, y1)))
