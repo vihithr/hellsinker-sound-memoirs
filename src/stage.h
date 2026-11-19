@@ -30,10 +30,14 @@ struct Memory {
     // Slow per-channel peak for the HELIX rack rails (hold ~0.8 s, fall 0.55/s).
     float meterPeak[2]{};
     int meterAge[2]{};
-    // HELIX torsion wave: a low-frequency attack launches a pulse at the left
-    // bearing that crosses the shaft in ~160 ms and decays behind the head.
-    float helixPulse=0;      // 0..1 strength of the travelling twist
-    float helixHead=-1;      // 0..1 position along the shaft, -1 = idle
+    // HELIX / SINK: per-channel level history, one rung every 1/15 s. The
+    // lattice scrolls these upward while the view sinks; each rung keeps the
+    // beat flag so strikes stay visible as they rise past the window.
+    static constexpr int kHist=64;
+    float histL[kHist]{}, histR[kHist]{};
+    unsigned char histBeat[kHist]{};
+    int histHead=0;
+    double histLast=-1;
     int head=0, trace=0, samples=0;
     double last=-1;
     double motion=-1;

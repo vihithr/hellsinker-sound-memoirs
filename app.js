@@ -140,7 +140,7 @@ const localFiles=new Map();  // norm(name) -> File, for browser-native decoding
 const fileKey=s=>s.toLowerCase().replaceAll("/","\\");
 let scrubbing=false,scrubFraction=0,next=0,fatal=null,ready=false,lastError="";
 const THEMES=["ORIGINAL","DARK","NEON","PAPER","BLUEPRINT"];
-const LAYOUTS=["ORIGINAL","FIELD","STACK","RING","CROSS","HELIX"];
+const LAYOUTS=["ORIGINAL","FIELD","STACK","RING","CROSS","SINK"];
 const ORDERS=["ORDER","ONE","LOOP","SHUFFLE"];
 const pending=new Map(),worker=new Worker("./worker.js",{type:"module"});
 

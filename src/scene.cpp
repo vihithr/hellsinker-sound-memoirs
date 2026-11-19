@@ -1105,204 +1105,173 @@ void PaintCrossLayout() {
     }
 }
 
-// ---- composition: mechanical DNA drive shaft (HELIX) ----------------------
-// From docs/visual-motion-roadmap.md: a horizontal two-strand pixel chain in
-// a central observation window, joined by short cross pins. Depth is read
-// from occlusion and pin width, not gradients: the front strand is complete,
-// the back strand breaks a few pixels at each crossing. A low-frequency
-// attack launches a torsion pulse at the left bearing that crosses the shaft
-// in ~160 ms; passed links spring back. Side racks (RACK) load with each
-// channel's fast envelope and leave a brief peak mark.
+// ---- composition: SINK descent shaft (HELIX slot) --------------------------
+// Two angular strands, one per channel, zigzag down a tall shaft and cross
+// into X / # lattices. Every rung is a 1/15 s sample of that channel's drive,
+// so the lattice is a core sample of the music. The rungs scroll upward
+// while the depth gauge counts down: the view is sinking through the track.
+// Beats mark their rung in the hot color and kick the descent speed.
 void PaintHelixLayout() {
     const Theme& t = Th();
-    const float kPi = 3.14159265f;
     FillRectCol(0, 0, S(kLogicalW), S(kLogicalH), LerpCol(t.outer, t.panel, 0.40f));
 
     const bool active = g_state->current >= 0;
-    const float impact = g_mem ? g_mem->impact : 0.f;
-    const float pulse = g_mem ? g_mem->helixPulse : 0.f;
-    const float head = g_mem ? g_mem->helixHead : -1.f;
+    const float imp = Impact();
+    const int H = stage::Memory::kHist;
 
-    // observation window; the frame flares on a beat so the hit reads even
-    // before the torsion wave arrives
-    const int wl = 92, wt = 108, wr = 548, wb = 348;
-    const COLORREF wc = impact > 0.06f
-        ? LerpCol(t.frame, t.stripHot, std::min(1.f, impact * 1.3f)) : t.frame;
-    FillRectCol(S(wl), S(wt), S(wr), S(wb), LerpCol(t.panel, t.outer, 0.30f));
-    FillRectCol(S(wl), S(wt), S(wr), S(wt + 1), wc);
-    FillRectCol(S(wl), S(wb - 1), S(wr), S(wb), wc);
-    FillRectCol(S(wl), S(wt), S(wl + 1), S(wb), wc);
-    FillRectCol(S(wr - 1), S(wt), S(wr), S(wb), wc);
-    // channel load strips inside the window edges: segmented, mirrored
-    for (int side = 0; side < 2; ++side) {
-        const float drive = std::clamp(g_state->wing[side], 0.f, 1.f);
-        const int n = int(drive * 54);
-        const int y = side ? wb - 8 : wt + 5;
-        for (int i = 0; i < n; ++i) {
-            const int x = wl + 6 + i * 8;
-            FillRectCol(S(x), S(y), S(x + 5), S(y + 3),
-                        i > 40 ? t.stripHot : t.strip);
-        }
+    // shaft geometry
+    const int wl = 210, wr = 430, wt = 56, wb = 440;
+    const int cx = 320, pitch = 12, maxOff = 86;
+    const COLORREF wc = imp > 0.06f
+        ? LerpCol(t.frame, t.stripHot, std::min(1.f, imp * 1.3f)) : t.frame;
+    FillRectCol(S(wl - 14), S(wt), S(wr + 14), S(wb), LerpCol(t.panel, t.outer, 0.30f));
+    FillRectCol(S(wl - 14), S(wt), S(wl - 13), S(wb), wc);
+    FillRectCol(S(wr + 13), S(wt), S(wr + 14), S(wb), wc);
+    // shaft wall ticks every rung, longer every 5th
+    for (int y = wt; y <= wb; y += pitch) {
+        const int len = ((y - wt) / pitch) % 5 == 0 ? 8 : 4;
+        FillRectCol(S(wl - 14), S(y), S(wl - 14 + len), S(y + 1), LerpCol(t.frame, t.outer, 0.35f));
+        FillRectCol(S(wr + 14 - len), S(y), S(wr + 14), S(y + 1), LerpCol(t.frame, t.outer, 0.35f));
     }
-    // corner rivets on the window frame
-    for (int x : { wl + 4, wr - 6 })
-        for (int y : { wt + 4, wb - 6 })
-            FillRectCol(S(x), S(y), S(x + 2), S(y + 2), t.seam);
-
-    const int cy = 228, xl = wl + 22, xr = wr - 22;
-    const int span = xr - xl;
-    // machine furniture: faint 12px dot grid inside the window, guide rules
-    // at the strand extremes, bearing housings at both ends
+    // faint dot grid inside the shaft
     const COLORREF grid = LerpCol(t.seam, t.panel, 0.45f);
-    for (int y = wt + 12; y < wb - 6; y += 12)
-        for (int x = wl + 12; x < wr - 6; x += 12)
+    for (int y = wt + 6; y < wb; y += 12)
+        for (int x = wl - 4; x < wr + 4; x += 12)
             FillRectCol(S(x), S(y), S(x + 1), S(y + 1), grid);
-    const COLORREF guide = LerpCol(t.frame, t.panel, 0.62f);
-    FillRectCol(S(xl), S(cy - 46), S(xr), S(cy - 45), guide);
-    FillRectCol(S(xl), S(cy + 46), S(xr), S(cy + 47), guide);
-    for (int bx : { xl - 12, xr + 4 }) {
-        FillRectCol(S(bx), S(cy - 30), S(bx + 8), S(cy + 30), t.frame);
-        FillRectCol(S(bx + 2), S(cy - 24), S(bx + 6), S(cy + 24), t.panel);
-        FillRectCol(S(bx + 2), S(cy - 2), S(bx + 6), S(cy + 2), t.frame);
-        // mounting bolts
-        FillRectCol(S(bx + 3), S(cy - 28), S(bx + 5), S(cy - 26), t.panel);
-        FillRectCol(S(bx + 3), S(cy + 26), S(bx + 5), S(cy + 28), t.panel);
-    }
-    // centre line of the shaft: dashed
-    for (int x = xl; x < xr; x += 8)
-        FillRectCol(S(x), S(cy), S(x + 4), S(cy + 1), LerpCol(t.seam, t.outer, 0.15f));
 
-    // torsion: local phase bump travelling with the pulse head
-    auto twist = [&](float u) -> float {
-        if (head < 0.f || pulse <= 0.01f) return 0.f;
-        const float d = u - head;
-        return pulse * 1.9f * std::exp(-d * d * 26.f);
+    // rung positions: continuous upward scroll locked to playback time
+    const double scroll = active ? g_state->seconds * 15.0 : 0.0;
+    const int base = int(std::floor(scroll));
+    const int frac = int((scroll - base) * pitch);
+    const int rows = (wb - wt) / pitch + 2;
+
+    // history lookup: row 0 = newest sample at the bottom of the shaft
+    auto hist = [&](int row, int side) -> float {
+        if (!g_mem || row < 0 || row >= H) return 0.f;
+        const int idx = (g_mem->histHead - row + H * 4) % H;
+        return side ? g_mem->histR[idx] : g_mem->histL[idx];
     };
-    // amplitude: narrow and slack in silence, tension from sustained bass,
-    // local flare where the torsion head passes
-    const float sustain = g_mem ? g_mem->lowSustain : 0.f;
-    auto amp = [&](float u) -> float {
-        const float base = active ? 26.f + 14.f * sustain : 9.f;
-        const float d = head >= 0.f ? u - head : 9.f;
-        return base + 16.f * pulse * std::exp(-d * d * 20.f);
+    auto beat = [&](int row) -> bool {
+        if (!g_mem || row < 0 || row >= H) return false;
+        const int idx = (g_mem->histHead - row + H * 4) % H;
+        return g_mem->histBeat[idx] != 0;
     };
-    // rotation speed follows the music: idle crawl, faster with sustained
-    // energy, a beat kicks it further (impact integrates into the phase)
-    const float spin = active
-        ? float(g_state->seconds) * (2.4f + 3.2f * sustain) + impact * 1.6f
-        : 0.6f;
-    const float turns = 2.6f;   // ~2.6 full twists across the window
+    // angular strand offset: triangle zigzag, period 8 rungs, channels in
+    // antiphase so the pair crosses twice per period (X / # lattice). The
+    // beat impact widens the whole lattice for a moment: the shaft flexes.
+    const float reach = maxOff + imp * 12.f;
+    auto strandX = [&](int n, int side, float drive) -> int {
+        const int m = ((n + (side ? 4 : 0)) % 8 + 8) % 8;
+        const float tri = m < 4 ? float(m) : float(8 - m);   // 0..4
+        const float u = tri * 0.5f - 1.f;                    // -1..+1
+        return cx + int(u * (16.f + drive * (reach - 16.f)));
+    };
 
-    // 20 cross pins: chunky bars whose width follows the section; side-on
-    // they read as a single rivet dot. Stressed pins near the torsion head
-    // borrow the spectrum accent, everything else is flat two-tone.
-    const int kPins = 20;
-    for (int p = 0; p < kPins; ++p) {
-        const float u = (p + 0.5f) / kPins;
-        const float th = spin + u * turns * 2.f * kPi + twist(u);
-        const float s = std::sin(th);
-        const int x = xl + int(u * span);
-        const int half = int(amp(u) * std::abs(s));
-        const int w = std::abs(s) > 0.55f ? 3 : std::abs(s) > 0.25f ? 2 : 1;
-        const float d = head >= 0.f ? u - head : 9.f;
-        const bool stressed = pulse > 0.1f && std::abs(d) < 0.10f;
-        const COLORREF pc = stressed ? t.bar : t.barLit;
-        if (half > 1)
-            FillRectCol(S(x - w / 2), S(cy - half), S(x + w / 2 + 1), S(cy + half), pc);
-        // rivet dot at the pin centre always reads, even side-on
-        FillRectCol(S(x - 1), S(cy - 1), S(x + 2), S(cy + 2), stressed ? t.bar : t.wave);
-        // end caps on the front strand; high-frequency transient lights the
-        // one or two nearest the head
-        const float hf = std::clamp(Lv(36) + Lv(40), 0.f, 1.f);
-        const bool lit = stressed || (hf > 0.55f && head >= 0.f && std::abs(d) < 0.16f);
-        const int ry = cy + int(amp(u) * s * (std::cos(th) > 0 ? 1.f : -1.f));
-        FillRectCol(S(x - 2), S(ry - 2), S(x + 3), S(ry + 3), lit ? t.stripHot : t.wave);
+    gfx_push_clip(S(wl - 14), S(wt + 1), S(wr + 14), S(wb - 1));
+    // rungs + cross pins, oldest at the top
+    for (int j = rows; j >= 0; --j) {
+        const int y = wb - j * pitch + frac;
+        if (y < wt - pitch || y > wb + pitch) continue;
+        const int n = base - j;                 // absolute sample index
+        const int row = j;                      // history age (0 = newest)
+        const float dl = hist(row, 0), dr = hist(row, 1);
+        const int xl2 = strandX(n, 0, dl), xr2 = strandX(n, 1, dr);
+        const bool hot = beat(row);
+        const bool fresh = row == 0;
+        // cross pin between the strands: the # bars
+        const int pl = std::min(xl2, xr2), pr = std::max(xl2, xr2);
+        if (pr - pl > 3) {
+            const COLORREF pc = hot ? t.stripHot : fresh ? t.bar : t.barLit;
+            FillRectCol(S(pl + 2), S(y - 1), S(pr - 1), S(y + 2), pc);
+        }
+        // rung nodes: 4x4 blocks, hot on beats, bright when fresh
+        const COLORREF lc = hot ? t.stripHot : fresh ? t.bar : t.wave;
+        const COLORREF rc = hot ? t.stripHot : fresh ? t.bar : LerpCol(t.wave, t.bar, 0.45f);
+        FillRectCol(S(xl2 - 2), S(y - 2), S(xl2 + 3), S(y + 3), lc);
+        FillRectCol(S(xr2 - 2), S(y - 2), S(xr2 + 3), S(y + 3), rc);
+    }
+    // strand segments: straight 2px lines between consecutive nodes (sharp
+    // angles, no curves). Drawn after the pins so the strands read on top.
+    for (int j = rows; j >= 1; --j) {
+        const int y0 = wb - j * pitch + frac, y1 = wb - (j - 1) * pitch + frac;
+        if (y1 < wt - pitch || y0 > wb + pitch) continue;
+        const int n0 = base - j, n1 = n0 + 1;
+        for (int side = 0; side < 2; ++side) {
+            const float d0 = hist(j, side), d1 = hist(j - 1, side);
+            GfxPoint seg[2] = {
+                { (std::int16_t)S(strandX(n0, side, d0)), (std::int16_t)S(y0) },
+                { (std::int16_t)S(strandX(n1, side, d1)), (std::int16_t)S(y1) } };
+            const COLORREF sc = side ? LerpCol(t.wave, t.bar, 0.45f) : t.wave;
+            gfx_polyline(seg, 2, sc, 2);
+        }
+    }
+    gfx_pop_clip();
+
+    // ---- depth gauge (left): playback position as descent depth -----------
+    {
+        const int gx = 150, gt = 70, gb = 430;
+        FillRectCol(S(gx), S(gt), S(gx + 1), S(gb), LerpCol(t.frame, t.outer, 0.25f));
+        for (int i = 0; i <= 10; ++i) {
+            const int y = gt + i * (gb - gt) / 10;
+            FillRectCol(S(gx - (i % 5 == 0 ? 8 : 4)), S(y), S(gx), S(y + 1),
+                        LerpCol(t.frame, t.outer, 0.30f));
+        }
+        const int my = gt + int(PlayProgress() * (gb - gt));
+        FillRectCol(S(gx - 12), S(my - 3), S(gx + 4), S(my + 4), t.bar);
+        FillRectCol(S(gx - 12), S(my - 3), S(gx + 4), S(my - 1), t.stripHot);
+        DrawCells("DEPTH", gx - 40, 58, 2);
+        char db[24];
+        snprintf(db, sizeof(db), "-%04dM", int(PlayProgress() * 9999));
+        DrawCells(db, gx - 44, 444, 3);
     }
 
-    // the two strands as chunky pixel chains: 3px links at 4px pitch. Back
-    // strand first with a gap at crossings, front strand complete on top.
-    const COLORREF backCol = LerpCol(t.wave, t.panel, 0.45f);
-    for (int x = xl; x <= xr; x += 4) {
-        const float u = float(x - xl) / span;
-        const float th = spin + u * turns * 2.f * kPi + twist(u);
-        const float s = std::sin(th), c = std::cos(th);
-        const int ya = cy + int(amp(u) * s);
-        const int yb = cy - int(amp(u) * s);
-        const bool aFront = c > 0.f;
-        const int yBack = aFront ? yb : ya;
-        const int yFront = aFront ? ya : yb;
-        const bool crossing = std::abs(s) < 0.18f;
-        if (!crossing)
-            FillRectCol(S(x), S(yBack - 1), S(x + 3), S(yBack + 2), backCol);
-        FillRectCol(S(x), S(yFront - 2), S(x + 3), S(yFront + 2), t.wave);
-    }
-
-    // ---- side racks (RACK): tooth rail + carriage per channel -------------
+    // ---- right column: live channel meters + low-band ladder --------------
     for (int side = 0; side < 2; ++side) {
-        const int rx = side ? 588 : 44;
-        const int top = 120, bot = 420;
-        // rail teeth
-        for (int y = top; y <= bot; y += 10) {
-            const int len = (y - top) % 50 == 0 ? 8 : 4;
-            const int x0 = side ? rx : rx - len;
-            FillRectCol(S(x0), S(y), S(x0 + len), S(y + 1),
-                        LerpCol(t.frame, t.outer, 0.35f));
-        }
-        FillRectCol(S(rx), S(top), S(rx + 1), S(bot), LerpCol(t.frame, t.outer, 0.25f));
-        // carriage: fast channel envelope drives the travel
+        const int x = 470 + side * 20;
         const float drive = std::clamp(g_state->wing[side], 0.f, 1.f);
-        const int cy2 = bot - int(drive * (bot - top - 16));
-        const int cx0 = side ? rx + 2 : rx - 16;
-        FillRectCol(S(cx0), S(cy2), S(cx0 + 14), S(cy2 + 16),
-                    LerpCol(t.bar, t.panel, 0.25f));
-        FillRectCol(S(cx0), S(cy2), S(cx0 + 14), S(cy2 + 2), t.bar);
-        FillRectCol(S(cx0 + 5), S(cy2 + 6), S(cx0 + 9), S(cy2 + 10), t.panel);
-        // brief peak mark left on the rail
-        const float pk = g_mem ? g_mem->meterPeak[side] : 0.f;
-        if (pk > 0.03f) {
-            const int py = bot - int(pk * (bot - top - 16));
-            FillRectCol(S(side ? rx - 6 : rx + 1), S(py), S(side ? rx : rx + 7), S(py + 2),
-                        t.stripHot);
+        const int n = int(drive * 24);
+        for (int i = 0; i < n; ++i) {
+            const int y = 300 - i * 6;
+            FillRectCol(S(x), S(y - 4), S(x + 12), S(y), i > 18 ? t.stripHot : t.strip);
         }
-        DrawCells(side ? "R" : "L", rx - 3, bot + 10, 2);
+        DrawCells(side ? "R" : "L", x + 2, 310, 2);
+    }
+    {
+        const int lx = 470, ly = 336;
+        for (int k = 0; k < 8; ++k) {
+            const int y = ly + k * 8;
+            const int w = int(Lv(k) * 120);
+            if (w > 0) FillRectCol(S(lx), S(y), S(lx + w), S(y + 3), t.bar);
+            const int pw = int(stage::bandLevel(g_state->spectrum.barsPrev[k]) * 120);
+            if (pw > w) FillRectCol(S(lx + w), S(y), S(lx + pw), S(y + 3), t.barLit);
+        }
+        DrawCells("LOW", lx, 326, 2);
+        static const char* orders[4] = { "ORDER", "ONE", "LOOP", "SHUFFLE" };
+        DrawCells(orders[g_state->localOrder % 4], lx, 412, 2);
     }
 
     // header / status
     DrawCells("SOUND MEMOIRS", 24, 20, 0);
     { const char* nm = t.name; DrawCells(nm, 616 - (int)strlen(nm) * 8, 20, 2); }
-    DrawCells("HELIX : 05", 24, 36, 3);
+    DrawCells("SINK : 05", 24, 36, 3);
     DrawCells(TransportWord(), 616 - (int)strlen(TransportWord()) * 8, 36,
               active && !g_state->libPaused ? 0 : 2);
 
-    // under the window: track + time + progress
+    // footer: track + name + time
     {
         char b[48];
         if (g_state->current == kTrackCount) snprintf(b, sizeof(b), "NOW : LOCAL FILE");
         else if (active) snprintf(b, sizeof(b), "NOW : TRACK %02d", g_state->current);
         else snprintf(b, sizeof(b), "NOW : <SILENCE>");
-        DrawCells(b, 92, 366, 3);
+        DrawCells(b, 24, 462, 3);
         char tb[32];
         const int secs = std::max(0, int(g_state->seconds));
         snprintf(tb, sizeof(tb), "%02d:%02d", secs / 60, secs % 60);
-        DrawCells(tb, 548 - (int)strlen(tb) * 8, 366, 3);
+        DrawCells(tb, 616 - (int)strlen(tb) * 8, 462, 3);
     }
     if (g_state->current == kTrackCount && g_state->libCurrentRow >= 0 &&
         g_state->libCurrentRow < g_libNameCount && g_libNames[g_state->libCurrentRow][0]) {
-        textLib(g_libNames[g_state->libCurrentRow], 92, 380, 548, 396, t.digit);
-    }
-    FillRectCol(S(92), S(404), S(548), S(408), t.seam);
-    {
-        const int end = 92 + int(456 * PlayProgress());
-        if (end > 92) FillRectCol(S(92), S(404), S(end), S(408), t.bar);
-        if (active)
-            FillRectCol(S(end - 1), S(402), S(end + 2), S(410),
-                        LerpCol(t.bar, RGB(255, 255, 255), 0.5f));
-    }
-    DrawCells("F7 VISUAL / F9 LAYOUT", 92, 424, 2);
-    {
-        char b[24];
-        snprintf(b, sizeof(b), "SEL:TR:%02d", std::max(0, g_state->selected));
-        DrawCells(b, 548 - (int)strlen(b) * 8, 424, 2);
+        textLib(g_libNames[g_state->libCurrentRow], 200, 456, 440, 472, t.digit);
     }
 }
 

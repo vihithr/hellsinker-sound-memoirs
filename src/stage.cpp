@@ -72,16 +72,15 @@ void Memory::advance(const memoirs::Spectrum& s,int id,double seconds,bool playi
         }
     }
 
-    // HELIX: launch a torsion pulse on a fresh low attack, then walk it across
-    // the shaft (160 ms end to end). Sustained bass keeps tension but does not
-    // re-fire; the pulse decays after the head leaves the right bearing.
-    if(helixHead>=0){
-        helixHead+=dt/0.16f;
-        if(helixHead>1.35f){helixHead=-1;helixPulse=0;}
-    }else if(attack>0.30f && helixPulse<=0.05f){
-        helixHead=0;helixPulse=std::clamp(attack,0.f,1.f);
+    // HELIX / SINK: sample the per-channel drives into the rung history at
+    // 15 Hz; a fresh low attack marks the rung as a beat.
+    if(histLast<0 || seconds-histLast>=1./15.){
+        histLast=seconds;
+        histHead=(histHead+1)%kHist;
+        histL[histHead]=drive[0];
+        histR[histHead]=drive[1];
+        histBeat[histHead]=attack>0.30f?1:0;
     }
-    if(helixPulse>0 && helixHead<0)helixPulse=std::max(0.f,helixPulse-2.5f*dt);
 
     if(last>=0 && seconds>=last && seconds-last<.045)return;
     last=seconds;

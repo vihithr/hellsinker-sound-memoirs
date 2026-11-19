@@ -72,9 +72,13 @@ def pt(i):
     return struct.unpack_from("<hh", pts, i * 4)
 
 
+clip_stack = [(0, 0, 640, 480)]
+
+
 def rect(x0, y0, x1, y1, color):
-    for y in range(max(0, y0), min(480, y1)):
-        for x in range(max(0, x0), min(640, x1)):
+    cx0, cy0, cx1, cy1 = clip_stack[-1]
+    for y in range(max(0, y0, cy0), min(480, y1, cy1)):
+        for x in range(max(0, x0, cx0), min(640, x1, cx1)):
             pix[x, y] = color
 
 
@@ -123,6 +127,12 @@ for i in range(n):
             bx, by = pt(po + k)
             line(ax, ay, bx, by, color, width)
             ax, ay = bx, by
+    elif op == 9:    # PUSH_CLIP
+        cx0, cy0, cx1, cy1 = clip_stack[-1]
+        clip_stack.append((max(cx0, x0), max(cy0, y0), min(cx1, x1), min(cy1, y1)))
+    elif op == 10:   # POP_CLIP
+        if len(clip_stack) > 1:
+            clip_stack.pop()
     elif op == 8:    # BLIT
         # Source rect in x0,y0,x1,y1; destination pos in point[0],
         # destination size in point[1] ({0,0} falls back to source size).
