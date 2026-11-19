@@ -1295,7 +1295,7 @@ void PaintDiveLayout() {
     // fall phase: strictly uniform - one layer born every ~1.4 s. Growth is
     // true perspective (below), so a layer is already far off-screen before
     // its slot recycles: the stream reads as one layer passing after another.
-    const double f = active ? g_state->seconds * 0.7 : 0.35;
+    const double f = active ? g_state->seconds * 0.42 : 0.35;
     const int base = int(std::floor(f));
     const float frac = float(f - base);
 
@@ -1333,7 +1333,10 @@ void PaintDiveLayout() {
     for (int k = 0; k + 1 < K; ++k) {
         const Frame& A = fr[k];      // farther
         const Frame& B = fr[k + 1];  // nearer
-        if (B.half * 0.55f > 430.f) continue;
+        // NOTE: no cull here. Even when the nearer layer's own geometry is
+        // off-screen, its vertices still anchor the rail so the waveform
+        // line between the last two layers never breaks; the polyline is
+        // simply clipped at the screen edge by the backend.
         const float depth = A.u;
         const float fade = std::min(0.96f, std::pow(1.f - depth, 1.6f));
         const COLORREF railC = LerpCol(t.frame, t.panel, fade);
