@@ -1460,17 +1460,32 @@ void PaintDiveLayout() {
             gfx_polyline(sA, ES + 1, strandA, w);
             gfx_polyline(sB, ES + 1, strandB, w);
         }
-        // aviation obstruction lights: HARD squares, hard on/off blink
-        // (2 beats on, 1 beat off), each layer on its own phase
+        // beacon glare: a natural flash, not a blinking square. Brightness
+        // and edge blur breathe together on a sharp pulse - at the peak the
+        // halo blooms wide and the core overexposes toward white, dazzling
+        // enough to hide the octagon's actual corner; at the trough it shrinks
+        // to a crisp point. Layered alpha squares approximate the radial glow.
         {
-            const bool lit = ((g_state->tick / 20 + k) % 3) != 0;
-            if (lit) {
-                const COLORREF mark = LerpCol(t.stripHot, t.panel, fade * 0.5f);
-                for (int c = 0; c < 8; ++c) {
-                    const int ms = depth < 0.5f ? 2 : 3;
-                    FillRectCol(oct[c].x - ms, oct[c].y - ms,
-                                oct[c].x + ms + 1, oct[c].y + ms + 1, mark);
-                }
+            const float phase = float(g_state->tick) / 60.f * 2.f * kPi / 1.8f + k * 1.3f;
+            float pulse = 0.5f + 0.5f * sinf(phase);
+            pulse = pulse * pulse * pulse;                 // sharp flash peak
+            const float blur = 2.f + 9.f * pulse;          // edge blur radius
+            const COLORREF halo = LerpCol(t.stripHot, t.panel, fade * 0.4f);
+            const COLORREF core = LerpCol(halo, RGB(255, 255, 255), 0.35f + 0.55f * pulse);
+            for (int c = 0; c < 8; ++c) {
+                const int bx = oct[c].x, by = oct[c].y;
+                const int b = int(blur);
+                // outer soft halo (blur grows with the flash)
+                AlphaFill(bx - b - 3, by - b - 3, bx + b + 4, by + b + 4,
+                          halo, int(18 + 40 * pulse));
+                AlphaFill(bx - b, by - b, bx + b + 1, by + b + 1,
+                          halo, int(40 + 80 * pulse));
+                AlphaFill(bx - b / 2 - 1, by - b / 2 - 1, bx + b / 2 + 2, by + b / 2 + 2,
+                          halo, int(70 + 110 * pulse));
+                // overexposed core: small and crisp when dim, blazing when lit
+                const int cs = 1 + int(2 * pulse);
+                AlphaFill(bx - cs, by - cs, bx + cs + 1, by + cs + 1,
+                          core, int(150 + 105 * pulse));
             }
         }
     }
