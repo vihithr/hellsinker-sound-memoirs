@@ -140,7 +140,7 @@ const localFiles=new Map();  // norm(name) -> File, for browser-native decoding
 const fileKey=s=>s.toLowerCase().replaceAll("/","\\");
 let scrubbing=false,scrubFraction=0,next=0,fatal=null,ready=false,lastError="";
 const THEMES=["ORIGINAL","DARK","NEON","PAPER","BLUEPRINT"];
-const LAYOUTS=["ORIGINAL","FIELD","STACK","RING","CROSS","SINK","DIVE"];
+const LAYOUTS=["ORIGINAL","FIELD","STACK","RING","CROSS","SINK","DIVE","SONO"];
 const ORDERS=["ORDER","ONE","LOOP","SHUFFLE"];
 const pending=new Map(),worker=new Worker("./worker.js",{type:"module"});
 
@@ -295,7 +295,7 @@ function adjustSetting(direction){
     case 1: theme=(theme+(direction>0?1:4))%5; refreshTitle(); break;
     case 2: lang=(lang+(direction>0?1:2))%3; loadFontForLang(); refreshTitle(); break;
     case 3: libFont=libFont?0:1; break;
-    case 4: cycleLayout(); break;
+    case 4: layoutMode=(layoutMode+(direction>0?1:LAYOUTS.length-1))%LAYOUTS.length;showGridOverlay=false; break;
   }
   markRailActivity();
 }
@@ -357,7 +357,7 @@ function hitLayout(x,y){
 }
 // Progress rails of the custom layouts: [x0,x1,y0,y1] hit bands.
 // All six custom layouts share the chassis footer rail (y 454..457).
-const LAYOUT_SEEK={1:[16,624,448,462],2:[16,624,448,462],3:[16,624,448,462],4:[16,624,448,462],5:[16,624,448,462],6:[16,624,448,462]};
+const LAYOUT_SEEK={1:[16,624,448,462],2:[16,624,448,462],3:[16,624,448,462],4:[16,624,448,462],5:[16,624,448,462],6:[16,624,448,462],7:[16,624,448,462]};
 function seekLayout(f){
   if(!buffer)return;
   offset=Math.max(0,Math.min(1,f))*buffer.duration;

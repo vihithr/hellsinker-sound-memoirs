@@ -31,6 +31,9 @@ const wchar_t* const kNames[Count][3] = {
     { L"Cross", L"四象限", L"四象限" },
     { L"Sink", L"沉井", L"沈降" },
     { L"Dive", L"坠入", L"潜航" },
+    { L"Sono", L"声谱瀑布", L"ソノグラム" },
+    { L"Track", L"八轨卷帘", L"トラッカー" },
+    { L"Deck", L"磁带卡座", L"カセットデッキ" },
 };
 
 } // namespace

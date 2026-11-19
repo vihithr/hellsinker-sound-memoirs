@@ -66,6 +66,19 @@ struct Memory {
     // (playing, not paused). Stopping freezes the shaft / tunnel in place;
     // resuming continues from the frozen phase instead of jumping ahead.
     double sinkClock=0, diveClock=0;
+    // SONO: 88-row quantised spectrogram history, printed at 15 rows/s.
+    static constexpr int kSonoRows=88;
+    std::uint8_t sono[kSonoRows][43]{};
+    int sonoHead=0;
+    double sonoClock=0, sonoLast=-1;
+    // TRACK: 32-row 8-channel hex pattern history at 12 rows/s.
+    static constexpr int kTrackRows=32;
+    std::uint8_t trackHex[kTrackRows][8]{};
+    std::uint8_t trackBeat[kTrackRows]{};
+    int trackHead=0, trackRowCounter=0;
+    double trackClock=0, trackLast=-1;
+    // DECK: reel rotation phase (rad), uniform 2.2 rad/s while audible.
+    double deckClock=0;
     void advance(const memoirs::Spectrum&, int id, double seconds, bool playing, bool paused);
 };
 struct Palette { COLORREF field, grid, line, accent, frame; };

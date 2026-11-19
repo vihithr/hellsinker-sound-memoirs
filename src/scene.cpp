@@ -1665,6 +1665,115 @@ void PaintDiveLayout() {
     PaintCustomFooter(false);
 }
 
+// ---- composition: SONO, SDR-style spectrogram waterfall --------------------
+// 43 bands x 88 rows of quantised history printed downward at a uniform
+// 15 rows/s. Five discrete hard-edge colour steps (no gradients): chords,
+// melody ridges and drum lines read directly off the scroll.
+void PaintSonoLayout() {
+    const Theme& t = Th();
+    FillRectCol(0, 0, S(kLogicalW), S(kLogicalH), t.outer);
+
+    // main waterfall window (82% of the frame: the single protagonist)
+    InsetPanel(16, 34, 540, 446);
+    const int pitch = 12, barW = 10;
+    const int x0 = 20;
+    // live mini spectrum strip on top: the eye sees energy being printed
+    {
+        const int baseY = 72;
+        const COLORREF ghost = LerpCol(t.panel, t.seam, 0.45f);
+        for (int k = 0; k < 43; ++k) {
+            const int x1 = x0 + k * pitch, x2 = x1 + barW;
+            const int up = int(Lv(k) * 30);
+            const int prevUp = int(stage::bandLevel(g_state->spectrum.barsPrev[k]) * 30);
+            for (int y = baseY - 30; y < baseY - prevUp; y += 3)
+                FillRectCol(S(x1), S(y), S(x2), S(std::min(y + 2, baseY - prevUp)), ghost);
+            for (int y = baseY - up; y < baseY; y += 3)
+                FillRectCol(S(x1), S(y), S(x2), S(std::min(y + 2, baseY)), t.bar);
+            for (int y = baseY - prevUp; y < baseY - up; y += 3)
+                FillRectCol(S(x1), S(y), S(x2), S(std::min(y + 2, baseY - up)), t.barLit);
+        }
+        FillRectCol(S(20), S(74), S(536), S(75), LerpCol(t.frame, t.panel, 0.35f));
+    }
+    // waterfall body: newest row at the top, history scrolls strictly down
+    if (g_mem) {
+        const int H = stage::Memory::kSonoRows;
+        const double clock = g_mem->sonoClock;
+        const int frac = int((clock - std::floor(clock)) * 4.0);
+        const COLORREF c1 = LerpCol(t.panel, t.seam, 0.85f);
+        gfx_push_clip(S(20), S(78), S(536), S(430));
+        for (int r = 0; r < H; ++r) {
+            const int y = 78 + r * 4 + frac;
+            if (y >= 430) break;
+            const int idx = (g_mem->sonoHead - 1 - r + H * 4) % H;
+            for (int k = 0; k < 43; ++k) {
+                const int v = g_mem->sono[idx][k];
+                if (v < 20) continue;                     // panel shows through
+                const COLORREF c = v <= 70 ? c1 : v <= 135 ? t.wave
+                                 : v <= 205 ? t.bar : t.accentHot;
+                const int x1 = x0 + k * pitch;
+                FillRectCol(S(x1), S(y), S(x1 + barW), S(y + 3), c);
+            }
+        }
+        gfx_pop_clip();
+    }
+    // frequency ruler under the waterfall
+    for (int i = 0; i < 8; ++i) {
+        const int x = 34 + i * 68;
+        FillRectCol(S(x), S(430), S(x + 1), S(433), LerpCol(t.frame, t.panel, 0.45f));
+        const int len = (int)strlen(kFreqLabel[i]);
+        DrawCells(kFreqLabel[i], x - 4 * len + 4, 434, 4);
+    }
+
+    // right telemetry column
+    InsetPanel(548, 34, 624, 446);
+    DrawCells("SPEC", 556, 42, 2);
+    DrawCells("15HZ", 556, 54, 3);
+    // time-depth ruler alongside the waterfall rows
+    {
+        static const char* marks[4] = { "-0S", "-2S", "-4S", "-6S" };
+        for (int i = 0; i < 4; ++i) {
+            const int y = 78 + i * 120;
+            FillRectCol(S(552), S(y), S(558), S(y + 1), t.frame);
+            DrawCells(marks[i], 560, y - 4, 2);
+        }
+    }
+    // compact L/R meters with peak ticks + CLIP lamps
+    for (int side = 0; side < 2; ++side) {
+        const int x = 556 + side * 20;
+        const float drive = std::clamp(g_state->wing[side], 0.f, 1.f);
+        const int n = int(drive * 20);
+        for (int i = 0; i < n; ++i) {
+            const int y = 330 - i * 6;
+            FillRectCol(S(x), S(y - 4), S(x + 12), S(y), i > 15 ? t.accentHot : t.strip);
+        }
+        if (g_mem && g_mem->meterPeak[side] > 0.02f) {
+            const int py = 330 - int(g_mem->meterPeak[side] * 120.f);
+            FillRectCol(S(x), S(py - 2), S(x + 12), S(py), t.accentHot);
+        }
+        DrawCells(side ? "R" : "L", x + 2, 336, 2);
+        // compact clip dot (full CLIP lamps do not fit the 76px column)
+        const bool clip = g_mem && g_mem->clipHold[side] > 0.f;
+        FillRectCol(S(x + 2), S(352), S(x + 10), S(360), clip ? t.accentHot : t.seam);
+    }
+    // 5-step colour legend + correlation readout
+    {
+        const COLORREF steps[5] = { t.panel, LerpCol(t.panel, t.seam, 0.85f),
+                                    t.wave, t.bar, t.accentHot };
+        for (int i = 0; i < 5; ++i)
+            FillRectCol(S(556 + i * 12), S(384), S(566 + i * 12), S(390), steps[i]);
+        FillRectCol(S(556), S(383), S(616), S(384), t.frame);
+        char b[16];
+        const int corr = g_mem ? int(g_mem->correlation * 99.f) : 0;
+        snprintf(b, sizeof(b), "COR%c%02d", corr < 0 ? '-' : '+', std::abs(corr));
+        DrawCells(b, 556, 402, 3);
+        static const char* orders[4] = { "ORDER", "ONE", "LOOP", "SHUFFLE" };
+        DrawCells(orders[g_state->localOrder % 4], 556, 420, 2);
+    }
+
+    PaintCustomHeader("SONO / 07");
+    PaintCustomFooter(false);
+}
+
 // ---- channel rail ---------------------------------------------------------
 // The page rail stays visible while the user is around and fades out after
 // 150 idle frames. While fading the pre-rail background is blended back
@@ -1899,6 +2008,7 @@ void sceneRender(const SceneState& s, float scale, const stage::Memory& memory,
         if (layoutMode == layout::Cross) { PaintCrossLayout(); return; }
         if (layoutMode == layout::Helix) { PaintHelixLayout(); return; }
         if (layoutMode == layout::Dive) { PaintDiveLayout(); return; }
+        if (layoutMode == layout::Sono) { PaintSonoLayout(); return; }
     }
 
     const int mode = s.stageMode;

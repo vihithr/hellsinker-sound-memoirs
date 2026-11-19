@@ -30,14 +30,19 @@ float channelDrive(float env,const float* wave){
 }
 }
 void Memory::advance(const memoirs::Spectrum& s,int id,double seconds,bool playing,bool paused){
+    // standby-aware animation clocks survive resets (freeze, never jump)
+    struct Clocks { double sink,dive,sono,track,deck; };
+    const Clocks keep{sinkClock,diveClock,sonoClock,trackClock,deckClock};
+    auto restore=[&](const Clocks& c){
+        sinkClock=c.sink; diveClock=c.dive; sonoClock=c.sono;
+        trackClock=c.track; deckClock=c.deck;
+    };
     if(id!=track || (playing && motion>=0 && (seconds+.10<motion || seconds-motion>1.0))){
-        const double sc=sinkClock, dc=diveClock;
-        *this=Memory{}; track=id; sinkClock=sc; diveClock=dc;
+        *this=Memory{}; track=id; restore(keep);
     }
     if(!playing){
         // standby lock: keep the frozen scene and clocks, zero the energy
-        const double sc=sinkClock, dc=diveClock;
-        *this=Memory{}; track=id; sinkClock=sc; diveClock=dc;
+        *this=Memory{}; track=id; restore(keep);
         return;
     }
     if(paused)return;
@@ -47,6 +52,9 @@ void Memory::advance(const memoirs::Spectrum& s,int id,double seconds,bool playi
     motion=seconds;
     sinkClock+=dt*8.0;    // 8 rungs/s at 10px = uniform 80px/s descent
     diveClock+=dt*0.32;   // one tunnel layer born every 1/0.32 s
+    sonoClock+=dt*15.0;   // SONO waterfall prints 15 rows/s
+    trackClock+=dt*12.0;  // TRACK pattern scrolls 12 rows/s
+    deckClock+=dt*2.2;    // DECK reels spin at a uniform 2.2 rad/s
 
     float low=0;
     for(int i=0;i<6;++i)low+=std::clamp(s.barsLevel[i]/96.f,0.f,1.f);
@@ -151,6 +159,31 @@ void Memory::advance(const memoirs::Spectrum& s,int id,double seconds,bool playi
             diveSpark[slot]=highSpark;
             divePhase[slot]=windL;
         }
+    }
+
+    // SONO: print quantised spectrogram rows on the 15 rows/s clock (catch
+    // up after a long frame so the scroll stays gapless)
+    if(sonoLast<0)sonoLast=sonoClock;
+    for(int guard=0;sonoClock-sonoLast>=1.0 && guard<8;++guard){
+        sonoLast+=1.0;
+        for(int k=0;k<43;k++)
+            sono[sonoHead][k]=std::uint8_t(std::clamp(bandLevel(s.barsLevel[k]),0.f,1.f)*255.f);
+        sonoHead=(sonoHead+1)%kSonoRows;
+    }
+    // TRACK: print 8-channel hex rows on the 12 rows/s clock (band max)
+    if(trackLast<0)trackLast=trackClock;
+    for(int guard=0;trackClock-trackLast>=1.0 && guard<8;++guard){
+        trackLast+=1.0;
+        static const int lo[8]={0,3,7,12,18,24,30,37};
+        static const int hi[8]={2,6,11,17,23,29,36,42};
+        for(int c=0;c<8;c++){
+            float m=0;
+            for(int k=lo[c];k<=hi[c];k++)m=std::max(m,bandLevel(s.barsLevel[k]));
+            trackHex[trackHead][c]=std::uint8_t(std::clamp(m,0.f,1.f)*255.f);
+        }
+        trackBeat[trackHead]=attack>0.30f?1:0;
+        trackHead=(trackHead+1)%kTrackRows;
+        trackRowCounter=(trackRowCounter+1)&0xFF;
     }
 
     if(last>=0 && seconds>=last && seconds-last<.045)return;

@@ -18,7 +18,10 @@ enum Mode : int {
     Ring,         // circular instrument dial
     Cross,        // four-quadrant instrument split
     Helix,        // SINK descent shaft: angular per-channel lattice
-    Dive,         // first-person fall through a rotating # / DNA tunnel
+    Dive,         // first-person fall through a spectrum light-gate tunnel
+    Sono,         // SDR-style spectrogram waterfall
+    Track,        // PC-98 / FastTracker II 8-channel hex pattern scroll
+    Deck,         // cassette / DAT deck: linked reels + VFD 7-segment clock
     Count
 };
 
