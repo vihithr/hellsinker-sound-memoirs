@@ -33,6 +33,10 @@ struct Memory {
     // Slow per-channel peak for the HELIX rack rails (hold ~0.8 s, fall 0.55/s).
     float meterPeak[2]{};
     int meterAge[2]{};
+    // Real acoustic telemetry: stereo phase correlation (-1..+1, smoothed)
+    // and a 1 s clip latch per channel (env >= 0.94 or wave peak >= 61).
+    float correlation=0.f;
+    float clipHold[2]{};
     // HELIX / SINK: per-channel level history, one rung every 1/15 s. The
     // lattice scrolls these upward while the view sinks; each rung keeps the
     // beat flag so strikes stay visible as they rise past the window.

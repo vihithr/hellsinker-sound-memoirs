@@ -77,6 +77,27 @@ void Memory::advance(const memoirs::Spectrum& s,int id,double seconds,bool playi
         xyGain=follow(xyGain,target,dt,.12,1.6);
     }
 
+    // Stereo phase correlation over the live window (true telemetry).
+    {
+        double sumLR=0,sumLL=0,sumRR=0;
+        for(int i=0;i<240;i+=2){
+            const double l=s.waveL[i],r=s.waveR[i];
+            sumLR+=l*r;sumLL+=l*l;sumRR+=r*r;
+        }
+        const float corr=sumLL*sumRR>1e-3?float(sumLR/std::sqrt(sumLL*sumRR)):0.f;
+        correlation=follow(correlation,std::clamp(corr,-1.f,1.f),dt,.08,.22);
+    }
+    // 1 s clip latch per channel: envelope near full scale or a hot sample.
+    {
+        const float env[2]={s.envL,s.envR};
+        const float* wv[2]={s.waveL,s.waveR};
+        for(int c=0;c<2;c++){
+            bool hot=env[c]>=0.94f;
+            if(!hot)for(int i=0;i<240;i++)if(std::abs(wv[c][i])>=61.f){hot=true;break;}
+            clipHold[c]=hot?1.0f:std::max(0.f,clipHold[c]-dt);
+        }
+    }
+
     // Slow per-channel peak marks for the HELIX rack rails.
     const float drive[2]={channelDrive(s.envL,s.waveL),channelDrive(s.envR,s.waveR)};
     for(int c=0;c<2;c++){
