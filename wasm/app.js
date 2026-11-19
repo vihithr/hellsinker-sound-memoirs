@@ -140,7 +140,7 @@ const localFiles=new Map();  // norm(name) -> File, for browser-native decoding
 const fileKey=s=>s.toLowerCase().replaceAll("/","\\");
 let scrubbing=false,scrubFraction=0,next=0,fatal=null,ready=false,lastError="";
 const THEMES=["ORIGINAL","DARK","NEON","PAPER","BLUEPRINT"];
-const LAYOUTS=["ORIGINAL","FIELD","STACK","RING","CROSS","SINK"];
+const LAYOUTS=["ORIGINAL","FIELD","STACK","RING","CROSS","SINK","DIVE"];
 const ORDERS=["ORDER","ONE","LOOP","SHUFFLE"];
 const pending=new Map(),worker=new Worker("./worker.js",{type:"module"});
 
@@ -356,7 +356,7 @@ function hitLayout(x,y){
   return null; // FIELD / HELIX use the TAB grid / keyboard
 }
 // Progress rails of the custom layouts: [x0,x1,y0,y1] hit bands.
-const LAYOUT_SEEK={1:[24,616,432,446],2:[96,400,445,461],4:[348,608,346,362],5:[92,548,398,414]};
+const LAYOUT_SEEK={1:[24,616,432,446],2:[96,400,445,461],4:[348,452,346,362],6:[24,616,468,480]};
 function seekLayout(f){
   if(!buffer)return;
   offset=Math.max(0,Math.min(1,f))*buffer.duration;

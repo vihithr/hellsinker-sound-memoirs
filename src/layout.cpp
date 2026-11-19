@@ -30,6 +30,7 @@ const wchar_t* const kNames[Count][3] = {
     { L"Ring", L"环形", L"環状" },
     { L"Cross", L"四象限", L"四象限" },
     { L"Sink", L"沉井", L"沈降" },
+    { L"Dive", L"坠入", L"潜航" },
 };
 
 } // namespace

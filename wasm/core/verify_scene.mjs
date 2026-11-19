@@ -76,7 +76,9 @@ function render() {
   if (clipDepth !== 0) throw new Error(`unbalanced clip stack: ${clipDepth}`);
   // Layouts other than Original draw fewer atlas glyphs; only require a
   // non-trivial, well-formed stream here (pixel accuracy is checked separately).
-  if (rects < 10 || blits < 5) throw new Error(`unexpected mix rect=${rects} blit=${blits}`);
+  // Line-art layouts (DIVE) legitimately have few rects; require a
+  // non-trivial stream overall instead of a fixed rect floor.
+  if (rects + lines < 15 || blits < 5) throw new Error(`unexpected mix rect=${rects} line=${lines} blit=${blits}`);
   return { n, rects, blits, lines, alpha, clips };
 }
 
@@ -93,7 +95,7 @@ for (let stage = 1; stage <= 3; stage++) {
   fill({ stage });
   results.push({ stage, ...render() });
 }
-for (let layout = 1; layout <= 5; layout++) {
+for (let layout = 1; layout <= 6; layout++) {
   fill({ layout, showGridOverlay: layout === 1 || layout === 4 ? 1 : 0 });
   results.push({ layout, ...render() });
 }

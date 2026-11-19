@@ -73,8 +73,8 @@ void Memory::advance(const memoirs::Spectrum& s,int id,double seconds,bool playi
     }
 
     // HELIX / SINK: sample the per-channel drives into the rung history at
-    // 15 Hz; a fresh low attack marks the rung as a beat.
-    if(histLast<0 || seconds-histLast>=1./15.){
+    // 8 Hz; a fresh low attack marks the rung as a beat.
+    if(histLast<0 || seconds-histLast>=1./8.){
         histLast=seconds;
         histHead=(histHead+1)%kHist;
         histL[histHead]=drive[0];

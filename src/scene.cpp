@@ -1121,7 +1121,7 @@ void PaintHelixLayout() {
 
     // shaft geometry
     const int wl = 210, wr = 430, wt = 56, wb = 440;
-    const int cx = 320, pitch = 12, maxOff = 86;
+    const int cx = 320, pitch = 10, maxOff = 86;
     const COLORREF wc = imp > 0.06f
         ? LerpCol(t.frame, t.stripHot, std::min(1.f, imp * 1.3f)) : t.frame;
     FillRectCol(S(wl - 14), S(wt), S(wr + 14), S(wb), LerpCol(t.panel, t.outer, 0.30f));
@@ -1140,7 +1140,8 @@ void PaintHelixLayout() {
             FillRectCol(S(x), S(y), S(x + 1), S(y + 1), grid);
 
     // rung positions: continuous upward scroll locked to playback time
-    const double scroll = active ? g_state->seconds * 15.0 : 0.0;
+    // (8 rungs/s at 10px = a calm 80px/s descent, no strobing)
+    const double scroll = active ? g_state->seconds * 8.0 : 0.0;
     const int base = int(std::floor(scroll));
     const int frac = int((scroll - base) * pitch);
     const int rows = (wb - wt) / pitch + 2;
@@ -1159,7 +1160,7 @@ void PaintHelixLayout() {
     // angular strand offset: triangle zigzag, period 8 rungs, channels in
     // antiphase so the pair crosses twice per period (X / # lattice). The
     // beat impact widens the whole lattice for a moment: the shaft flexes.
-    const float reach = maxOff + imp * 12.f;
+    const float reach = maxOff + imp * 8.f;
     auto strandX = [&](int n, int side, float drive) -> int {
         const int m = ((n + (side ? 4 : 0)) % 8 + 8) % 8;
         const float tri = m < 4 ? float(m) : float(8 - m);   // 0..4
@@ -1178,17 +1179,18 @@ void PaintHelixLayout() {
         const int xl2 = strandX(n, 0, dl), xr2 = strandX(n, 1, dr);
         const bool hot = beat(row);
         const bool fresh = row == 0;
-        // cross pin between the strands: the # bars
+        // cross pin between the strands: the # bars (1px, quiet)
         const int pl = std::min(xl2, xr2), pr = std::max(xl2, xr2);
         if (pr - pl > 3) {
             const COLORREF pc = hot ? t.stripHot : fresh ? t.bar : t.barLit;
-            FillRectCol(S(pl + 2), S(y - 1), S(pr - 1), S(y + 2), pc);
+            FillRectCol(S(pl + 2), S(y), S(pr - 1), S(y + 1), pc);
         }
-        // rung nodes: 4x4 blocks, hot on beats, bright when fresh
-        const COLORREF lc = hot ? t.stripHot : fresh ? t.bar : t.wave;
-        const COLORREF rc = hot ? t.stripHot : fresh ? t.bar : LerpCol(t.wave, t.bar, 0.45f);
-        FillRectCol(S(xl2 - 2), S(y - 2), S(xl2 + 3), S(y + 3), lc);
-        FillRectCol(S(xr2 - 2), S(y - 2), S(xr2 + 3), S(y + 3), rc);
+        // rung nodes: 3x3 blocks; a beat only heats the node, no full flare
+        const COLORREF lc = hot ? LerpCol(t.wave, t.stripHot, 0.7f) : fresh ? t.bar : t.wave;
+        const COLORREF rc = hot ? LerpCol(t.wave, t.stripHot, 0.7f) : fresh ? t.bar
+                          : LerpCol(t.wave, t.bar, 0.45f);
+        FillRectCol(S(xl2 - 1), S(y - 1), S(xl2 + 2), S(y + 2), lc);
+        FillRectCol(S(xr2 - 1), S(y - 1), S(xr2 + 2), S(y + 2), rc);
     }
     // strand segments: straight 2px lines between consecutive nodes (sharp
     // angles, no curves). Drawn after the pins so the strands read on top.
@@ -1202,7 +1204,7 @@ void PaintHelixLayout() {
                 { (std::int16_t)S(strandX(n0, side, d0)), (std::int16_t)S(y0) },
                 { (std::int16_t)S(strandX(n1, side, d1)), (std::int16_t)S(y1) } };
             const COLORREF sc = side ? LerpCol(t.wave, t.bar, 0.45f) : t.wave;
-            gfx_polyline(seg, 2, sc, 2);
+            gfx_polyline(seg, 2, sc, 1);
         }
     }
     gfx_pop_clip();
@@ -1268,6 +1270,133 @@ void PaintHelixLayout() {
         const int secs = std::max(0, int(g_state->seconds));
         snprintf(tb, sizeof(tb), "%02d:%02d", secs / 60, secs % 60);
         DrawCells(tb, 616 - (int)strlen(tb) * 8, 462, 3);
+    }
+    if (g_state->current == kTrackCount && g_state->libCurrentRow >= 0 &&
+        g_state->libCurrentRow < g_libNameCount && g_libNames[g_state->libCurrentRow][0]) {
+        textLib(g_libNames[g_state->libCurrentRow], 200, 456, 440, 472, t.digit);
+    }
+}
+
+// ---- composition: DIVE, first-person fall through a # / DNA tunnel --------
+// From the user's sketch: crossed frames are born at the centre dot, rotate
+// and grow toward the viewer, then leave past the screen edge. The newest
+// (farthest) frame is bright - the "next crossing" - and frames sink toward
+// the panel color as they pass. Corner rails between consecutive frames read
+// as the helix strands; their half-width is that moment's channel drive, so
+// the tunnel breathes with the music. A beat kicks the fall speed.
+void PaintDiveLayout() {
+    const Theme& t = Th();
+    const float kPi = 3.14159265f;
+    FillRectCol(0, 0, S(kLogicalW), S(kLogicalH), LerpCol(t.outer, t.panel, 0.55f));
+
+    const bool active = g_state->current >= 0;
+    const float imp = Impact();
+    const int cx = 320, cy = 240;
+    const int K = 6;                       // frames in flight at once
+    const int H = stage::Memory::kHist;
+
+    // fall phase: one frame born every ~1.1 s, kicked forward by beats
+    const double rate = 0.9 + imp * 0.7;
+    const double f = active ? g_state->seconds * rate : 0.35;
+    const int base = int(std::floor(f));
+    const float frac = float(f - base);
+
+    auto hist = [&](int age, int side) -> float {
+        if (!g_mem || age < 0 || age >= H) return 0.f;
+        const int idx = (g_mem->histHead - age + H * 4) % H;
+        return side ? g_mem->histR[idx] : g_mem->histL[idx];
+    };
+
+    struct Frame { int half; float ang; float u; int age; };
+    Frame fr[6];
+    for (int k = 0; k < K; ++k) {
+        const float u = (k + frac) / K;              // 0 new/far .. 1 old/near
+        const int age = base - k;                    // history sample index
+        const float drive = std::clamp((hist(age, 0) + hist(age, 1)) * 0.5f, 0.f, 1.f);
+        fr[k].u = u;
+        fr[k].age = age;
+        fr[k].half = int(12.f + 430.f * u * u * (0.70f + 0.45f * drive));
+        fr[k].ang = age * 0.16f + (active ? float(g_state->seconds) * 0.06f : 0.f);
+    }
+
+    // corner rails first (under the frames): the DNA strands of the tunnel
+    for (int k = 0; k + 1 < K; ++k) {
+        for (int c = 0; c < 4; ++c) {
+            const float a0 = fr[k].ang + kPi / 4.f + c * kPi / 2.f;
+            const float a1 = fr[k + 1].ang + kPi / 4.f + c * kPi / 2.f;
+            const int r0 = int(fr[k].half * 1.4142f), r1 = int(fr[k + 1].half * 1.4142f);
+            GfxPoint seg[2] = {
+                { (std::int16_t)S(cx + int(r0 * cosf(a0))), (std::int16_t)S(cy + int(r0 * sinf(a0))) },
+                { (std::int16_t)S(cx + int(r1 * cosf(a1))), (std::int16_t)S(cy + int(r1 * sinf(a1))) } };
+            const float depth = fr[k].u;
+            gfx_polyline(seg, 2, LerpCol(t.wave, t.panel, 0.35f + depth * 0.5f), 1);
+        }
+    }
+
+    // the # frames, far (bright) to near (dim), painter's order
+    for (int k = 0; k < K; ++k) {
+        const Frame& F = fr[k];
+        if (F.half > 560) continue;                  // fully past the viewer
+        const float depth = F.u;
+        // newest frame = the bright "next crossing"; older sinks to panel
+        COLORREF col = depth < 0.2f ? t.bar
+                     : LerpCol(t.wave, t.panel, std::min(0.85f, 0.1f + depth * 0.85f));
+        if (depth < 0.2f && imp > 0.2f) col = LerpCol(t.bar, t.stripHot, imp);
+        const int w = depth < 0.35f ? 2 : depth < 0.7f ? 3 : 4;
+        const float ca = cosf(F.ang), sa = sinf(F.ang);
+        // two parallel bars per direction, offset +-half/3: the # shape
+        for (int dir = 0; dir < 2; ++dir) {
+            const float dx = dir ? -sa : ca, dy = dir ? ca : sa;   // bar direction
+            const float nx = -dy, ny = dx;                          // offset normal
+            for (int o = -1; o <= 1; o += 2) {
+                const float off = F.half * 0.34f * o;
+                const int bx = cx + int(nx * off), by = cy + int(ny * off);
+                GfxPoint seg[2] = {
+                    { (std::int16_t)S(bx - int(dx * F.half)), (std::int16_t)S(by - int(dy * F.half)) },
+                    { (std::int16_t)S(bx + int(dx * F.half)), (std::int16_t)S(by + int(dy * F.half)) } };
+                gfx_polyline(seg, 2, col, w);
+            }
+        }
+        // rung pins on the frame corners: small squares, hot on a beat
+        if (g_mem && F.age >= 0 && F.age < H) {
+            const int idx = (g_mem->histHead - F.age + H * 4) % H;
+            if (g_mem->histBeat[idx] && depth < 0.5f) {
+                for (int c = 0; c < 4; ++c) {
+                    const float a = F.ang + kPi / 4.f + c * kPi / 2.f;
+                    const int r = int(F.half * 1.4142f);
+                    const int x = cx + int(r * cosf(a)), y = cy + int(r * sinf(a));
+                    FillRectCol(S(x - 2), S(y - 2), S(x + 3), S(y + 3), t.stripHot);
+                }
+            }
+        }
+    }
+
+    // the vanishing point: the centre dot every frame is born from
+    FillRectCol(S(cx - 2), S(cy - 2), S(cx + 3), S(cy + 3), t.ink);
+    FillRectCol(S(cx - 1), S(cy - 1), S(cx + 2), S(cy + 2), t.frame);
+
+    // corner readouts keep the tunnel readable as an instrument
+    DrawCells("SOUND MEMOIRS", 24, 20, 0);
+    { const char* nm = t.name; DrawCells(nm, 616 - (int)strlen(nm) * 8, 20, 2); }
+    DrawCells("DIVE : 06", 24, 36, 3);
+    DrawCells(TransportWord(), 616 - (int)strlen(TransportWord()) * 8, 36,
+              active && !g_state->libPaused ? 0 : 2);
+    {
+        char b[48];
+        if (g_state->current == kTrackCount) snprintf(b, sizeof(b), "NOW : LOCAL FILE");
+        else if (active) snprintf(b, sizeof(b), "NOW : TRACK %02d", g_state->current);
+        else snprintf(b, sizeof(b), "NOW : <SILENCE>");
+        DrawCells(b, 24, 462, 3);
+        char tb[32];
+        const int secs = std::max(0, int(g_state->seconds));
+        snprintf(tb, sizeof(tb), "%02d:%02d", secs / 60, secs % 60);
+        DrawCells(tb, 616 - (int)strlen(tb) * 8, 462, 3);
+    }
+    // thin progress rail along the very bottom
+    FillRectCol(S(24), S(474), S(616), S(476), t.seam);
+    {
+        const int end = 24 + int(592 * PlayProgress());
+        if (end > 24) FillRectCol(S(24), S(474), S(end), S(476), t.bar);
     }
     if (g_state->current == kTrackCount && g_state->libCurrentRow >= 0 &&
         g_state->libCurrentRow < g_libNameCount && g_libNames[g_state->libCurrentRow][0]) {
@@ -1508,6 +1637,7 @@ void sceneRender(const SceneState& s, float scale, const stage::Memory& memory,
         if (layoutMode == layout::Ring) { PaintRingLayout(); return; }
         if (layoutMode == layout::Cross) { PaintCrossLayout(); return; }
         if (layoutMode == layout::Helix) { PaintHelixLayout(); return; }
+        if (layoutMode == layout::Dive) { PaintDiveLayout(); return; }
     }
 
     const int mode = s.stageMode;

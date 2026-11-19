@@ -17,7 +17,8 @@ enum Mode : int {
     Stack,        // vertical three-column instrument rack
     Ring,         // circular instrument dial
     Cross,        // four-quadrant instrument split
-    Helix,        // mechanical DNA drive shaft (visual-motion-roadmap.md)
+    Helix,        // SINK descent shaft: angular per-channel lattice
+    Dive,         // first-person fall through a rotating # / DNA tunnel
     Count
 };
 
