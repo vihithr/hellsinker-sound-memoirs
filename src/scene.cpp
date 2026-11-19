@@ -1324,7 +1324,41 @@ void PaintDiveLayout() {
         const float z = std::max(0.008f, 1.f - u);
         fr[k].half = std::min(4000.f, 13.f / z);
         fr[k].drive = std::clamp((hist(age, 0) + hist(age, 1)) * 0.5f, 0.f, 1.f);
-        fr[k].ang = age * 0.35f + (active ? float(g_state->seconds) * 0.22f : 0.f);
+        fr[k].ang = age * 0.5f + (active ? float(g_state->seconds) * 0.55f : 0.f);
+    }
+
+    // tunnel-wall rails: connect each layer's 8 vertices to the next layer's
+    // corresponding vertex. Odd vertices carry the L waveform, even the R,
+    // displaced perpendicular to the rail - the walls are live scopes.
+    for (int k = 0; k + 1 < K; ++k) {
+        const Frame& A = fr[k];      // farther
+        const Frame& B = fr[k + 1];  // nearer
+        if (B.half * 0.55f > 430.f) continue;
+        const float depth = A.u;
+        const float fade = std::min(0.96f, std::pow(1.f - depth, 1.6f));
+        const COLORREF railC = LerpCol(t.frame, t.panel, fade);
+        for (int c = 0; c < 8; ++c) {
+            const float aa = kPi / 8.f + c * kPi / 4.f;
+            const float ax = A.half * cosf(aa + A.ang), ay = A.half * sinf(aa + A.ang);
+            const float bx = B.half * cosf(aa + B.ang), by = B.half * sinf(aa + B.ang);
+            const float dx = bx - ax, dy = by - ay;
+            const float len = std::sqrt(dx * dx + dy * dy);
+            if (len < 2.f) continue;
+            const float nx = -dy / len, ny = dx / len;
+            const float* wv = (c % 2) ? g_state->spectrum.waveL : g_state->spectrum.waveR;
+            const COLORREF wc = LerpCol((c % 2) ? t.wave : LerpCol(t.wave, t.bar, 0.45f),
+                                        t.panel, fade);
+            const int RS = 16;
+            GfxPoint rail[17];
+            for (int i = 0; i <= RS; ++i) {
+                const float tt = float(i) / RS;
+                const float v = std::clamp(wv[(i * 14) % 240] / 64.f, -1.f, 1.f);
+                const float disp = v * std::min(14.f, len * 0.12f);
+                rail[i] = { (std::int16_t)S(cx + int(ax + dx * tt + nx * disp)),
+                            (std::int16_t)S(cy + int(ay + dy * tt + ny * disp)) };
+            }
+            gfx_polyline(rail, RS + 1, wc, 1);
+        }
     }
 
     // painter's order: far (small, transparent) first, near (large, solid)
@@ -1335,13 +1369,15 @@ void PaintDiveLayout() {
         // expanded beyond the frame by then, never "hits" the screen
         if (F.half * 0.55f > 430.f) continue;
         const float depth = F.u;
-        // depth cue: far layers are transparent (sunk toward the backdrop),
-        // near layers are solid - monotonic, no reversal at the closest pass
-        const float fade = std::max(0.f, 0.85f * (1.f - depth));
+        // depth cue: far/small layers nearly dissolve into the backdrop
+        // (power curve), near layers solid - monotonic, no reversal
+        const float fade = std::min(0.96f, std::pow(1.f - depth, 1.6f));
         const COLORREF strandA = LerpCol(t.wave, t.panel, fade);
         const COLORREF strandB = LerpCol(LerpCol(t.wave, t.bar, 0.45f), t.panel, fade);
-        // rungs: hot bonds, same far-transparent / near-solid ramp
-        const COLORREF rungC = LerpCol(t.stripHot, t.panel, std::min(0.8f, fade + 0.05f));
+        // rungs: hot bonds pushed toward ink so they contrast on EVERY theme
+        // (light or dark), then the same far-transparent / near-solid ramp
+        const COLORREF rungHot = LerpCol(t.stripHot, t.ink, 0.3f);
+        const COLORREF rungC = LerpCol(rungHot, t.panel, std::min(0.85f, fade + 0.05f));
         const int w = 1;                             // hairline strands always
         // helix swing: tight around the edge line; drive still sets the width
         const float amp = F.half * (0.03f + 0.07f * F.drive);
