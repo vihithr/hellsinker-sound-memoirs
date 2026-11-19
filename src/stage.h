@@ -23,11 +23,7 @@ struct Memory {
     std::array<std::array<GfxPoint,120>,6> traces{};
     float lowSustain=0, impact=0, lowFloor=0, lastLow=0;
     float wing[2]{};
-    // Peak-hold caps for the custom layouts: rise instantly, hold ~0.45 s,
-    // then fall at a constant 0.9/s. Values are the remapped 0..1 band level.
-    float peak[43]{};
-    int peakAge[43]{};
-    // Slow per-channel peak for the meter rails (hold ~0.8 s, fall 0.55/s).
+    // Slow per-channel peak for the HELIX rack rails (hold ~0.8 s, fall 0.55/s).
     float meterPeak[2]{};
     int meterAge[2]{};
     // HELIX torsion wave: a low-frequency attack launches a pulse at the left

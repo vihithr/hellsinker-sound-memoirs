@@ -38,7 +38,19 @@ if off + 4 <= len(data):
 
 img = Image.new("RGB", (640, 480), (0, 0, 0))
 pix = img.load()
-cells = Image.open(root / "wasm/assets/cells_0.png").convert("RGB")
+# Optional env overrides for reviewing non-baseline frames:
+#   HS_DUMP=<bin path>  HS_THEME=<0..4>  HS_OUT=<png path>
+import os
+if os.environ.get("HS_DUMP"):
+    data = Path(os.environ["HS_DUMP"]).read_bytes()
+    off = 0
+    n = struct.unpack_from("<I", data, off)[0]; off += 4
+    cmds = data[off:off + n * 20]; off += n * 20
+    mp = struct.unpack_from("<I", data, off)[0]; off += 4
+    pts = data[off:off + mp * 4]; off += mp * 4
+    texts = []
+theme_idx = int(os.environ.get("HS_THEME", "0"))
+cells = Image.open(root / f"wasm/assets/cells_{theme_idx}.png").convert("RGB")
 # Full artwork addressed by src >= kGfxImageBase (100): 100..104 = themed
 # title_0..4.png (recolored per theme by make_themed_title.py).
 images = {
@@ -143,7 +155,11 @@ if texts:
         ty = y + (bottom - y - th) // 2
         td.text((tx, ty), s, fill=rgb, font=font)
 
-img.save(root / "obj/scene_render.png")
+out_path = Path(os.environ["HS_OUT"]) if os.environ.get("HS_OUT") else root / "obj/scene_render.png"
+img.save(out_path)
+if os.environ.get("HS_DUMP"):
+    print("rendered:", out_path)
+    sys.exit(0)
 
 ref = Image.open(root / "obj" / baseline_name).convert("RGB")
 rp = ref.load()

@@ -51,17 +51,7 @@ void Memory::advance(const memoirs::Spectrum& s,int id,double seconds,bool playi
     wing[0]=follow(wing[0],channelDrive(s.envL,s.waveL),dt,.030,.30);
     wing[1]=follow(wing[1],channelDrive(s.envR,s.waveR),dt,.030,.30);
 
-    // Peak-hold caps (custom layouts only; ORIGINAL keeps its own decay tail).
-    // The remap matches the painter's bandLevel(): noise floor + gamma so a
-    // medium passage no longer pins every bar near the top.
-    for(int i=0;i<43;i++){
-        const float lv=bandLevel(s.barsLevel[i]);
-        if(lv>=peak[i]){peak[i]=lv;peakAge[i]=0;}
-        else{
-            peakAge[i]++;
-            if(peakAge[i]>27)peak[i]=std::max(lv,peak[i]-0.9f*dt);
-        }
-    }
+    // Slow per-channel peak marks for the HELIX rack rails.
     const float drive[2]={channelDrive(s.envL,s.waveL),channelDrive(s.envR,s.waveR)};
     for(int c=0;c<2;c++){
         if(drive[c]>=meterPeak[c]){meterPeak[c]=drive[c];meterAge[c]=0;}
