@@ -41,17 +41,10 @@ struct Memory {
     // and a 1 s clip latch per channel (env >= 0.94 or wave peak >= 61).
     float correlation=0.f;
     float clipHold[2]{};
-    // Eight terrain profiles per second. The painter interpolates their depth.
-    static constexpr int kHist=32;
-    static constexpr int kProfile=22;
-    float relief[kHist][kProfile]{};
+    static constexpr int kHist=64;
     float histL[kHist]{}, histR[kHist]{};
     int histHead=0;
     double histClock=-1;
-    // DIVE gates retain their energy and transient at birth.
-    static constexpr int kDiveSlots=16;
-    int diveLastBase=-1;
-    float diveDrive[kDiveSlots]{}, diveSpark[kDiveSlots]{};
     int head=0, trace=0, samples=0;
     double last=-1;
     double motion=-1;

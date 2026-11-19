@@ -141,7 +141,6 @@ void Memory::advance(const memoirs::Spectrum& s,int id,double seconds,bool playi
 
     // Slow per-channel peak marks, fed by the calibrated meter so the hold
     // ticks jump with real peaks instead of pinning to the top.
-    const float drive[2]={channelDrive(s.envL,s.waveL),channelDrive(s.envR,s.waveR)};
     for(int c=0;c<2;c++){
         if(meter[c]>=meterPeak[c]){meterPeak[c]=meter[c];meterAge[c]=0;}
         else{
@@ -150,36 +149,14 @@ void Memory::advance(const memoirs::Spectrum& s,int id,double seconds,bool playi
         }
     }
 
-    // HELIX / SINK: rung pushes lock to sinkClock integer boundaries - the
-    // painter's sub-row frac and histHead advance on the SAME frame.
+    // Subsample channel envelopes on the descent clock. New samples enter
+    // at the mouth of the shaft and travel down with their coil geometry.
     if(histClock<0)histClock=std::floor(sinkClock);
-    for(int guard=0;sinkClock-histClock>=1.0 && guard<8;++guard){
+    while(sinkClock-histClock>=1.0){
         histClock+=1.0;
         histHead=(histHead+1)%kHist;
-        histL[histHead]=drive[0];
-        histR[histHead]=drive[1];
-        for(int j=0;j<kProfile;++j){
-            const int k=j*2;
-            const float level=std::max(s.barsLevel[k],s.barsLevel[std::min(k+1,42)]);
-            relief[histHead][j]=bandLevel(level);
-        }
-    }
-
-    // DIVE: freeze a birth snapshot whenever a new layer spawns (0.32/s on
-    // the standby-aware dive clock, synced with the painter). Ring of 16.
-    {
-        const int b=int(std::floor(diveClock));
-        if(b>diveLastBase){
-            if(diveLastBase<0){
-                // cold start (track switch / first play): pre-fill a base
-                // energy so the first layers are not flat-zero trusses
-                for(int i=0;i<kDiveSlots;i++)diveDrive[i]=0.25f;
-            }
-            diveLastBase=b;
-            const int slot=b%kDiveSlots;
-            diveDrive[slot]=std::clamp((wing[0]+wing[1])*0.5f,0.f,1.f);
-            diveSpark[slot]=highSpark;
-        }
+        histL[histHead]=meter[0];
+        histR[histHead]=meter[1];
     }
 
     // SONO: print quantised spectrogram rows on the 15 rows/s clock (catch
