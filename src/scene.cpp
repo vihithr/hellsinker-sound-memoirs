@@ -1318,32 +1318,30 @@ void PaintDiveLayout() {
         fr[k].u = u;
         fr[k].age = age;
         // true perspective: a point at depth z projects to size ~ 1/z.
-        // u -> 1 means z -> 0 (the viewer), so the size diverges and the
-        // layer sweeps off-screen continuously instead of popping out.
-        const float z = std::max(0.045f, 1.f - u);
+        // The z floor is small enough that a layer grows well past the
+        // screen (half > 800) before its slot recycles: it keeps expanding
+        // off-frame instead of stopping at the screen and vanishing.
+        const float z = std::max(0.008f, 1.f - u);
         fr[k].half = std::min(4000.f, 13.f / z);
         fr[k].drive = std::clamp((hist(age, 0) + hist(age, 1)) * 0.5f, 0.f, 1.f);
         fr[k].ang = age * 0.35f + (active ? float(g_state->seconds) * 0.22f : 0.f);
     }
 
-    // painter's order: far (small, bright) first, near (large, dim) on top
+    // painter's order: far (small, transparent) first, near (large, solid)
     for (int k = 0; k < K; ++k) {
         const Frame& F = fr[k];
-        // a layer is only dropped once its # hole is wider than the screen
-        // diagonal: every strand has already swept off-frame by then
-        if (F.half * 0.46f > 500.f) continue;
+        // drop a layer only when even its innermost geometry (the # edges
+        // nearest the centre) is past the screen corner: it has fully
+        // expanded beyond the frame by then, never "hits" the screen
+        if (F.half * 0.55f > 430.f) continue;
         const float depth = F.u;
-        // depth cue: far layers dim, brightness rises as a layer approaches,
-        // then the closest pass sinks back into the backdrop so its long
-        // off-screen lines never dominate the picture
-        const float rise = std::min(1.f, depth * 1.6f);          // 0 far .. 1 near
-        float fade = 0.88f - 0.72f * rise;                       // toward panel
-        if (depth > 0.72f)
-            fade = std::min(0.94f, fade + (depth - 0.72f) * 2.6f);
+        // depth cue: far layers are transparent (sunk toward the backdrop),
+        // near layers are solid - monotonic, no reversal at the closest pass
+        const float fade = std::max(0.f, 0.85f * (1.f - depth));
         const COLORREF strandA = LerpCol(t.wave, t.panel, fade);
         const COLORREF strandB = LerpCol(LerpCol(t.wave, t.bar, 0.45f), t.panel, fade);
-        // rungs: hot bonds, same far-dim / near-bright ramp
-        const COLORREF rungC = LerpCol(t.stripHot, t.panel, std::max(0.f, fade - 0.1f));
+        // rungs: hot bonds, same far-transparent / near-solid ramp
+        const COLORREF rungC = LerpCol(t.stripHot, t.panel, std::min(0.8f, fade + 0.05f));
         const int w = 1;                             // hairline strands always
         // helix swing: tight around the edge line; drive still sets the width
         const float amp = F.half * (0.03f + 0.07f * F.drive);
@@ -1353,23 +1351,33 @@ void PaintDiveLayout() {
             return { (std::int16_t)S(cx + int(lx * ca - ly * sa)),
                      (std::int16_t)S(cy + int(lx * sa + ly * ca)) };
         };
-        // each layer is a # with a deliberately huge centre hole: the four
-        // DNA edges sit far out at +-0.72*half and span only +-0.52*half.
-        // Eight soft beacon lights (4 corners + 4 edge midpoints) bound the
-        // figure; strands never run past them.
-        const float off = F.half * 0.72f;
-        const float reach = F.half * 0.52f;
-        GfxPoint beacons[8] = {
-            pt(-off, -off), pt(0, -off), pt(off, -off), pt(off, 0),
-            pt(off, off), pt(0, off), pt(-off, off), pt(-off, 0) };
+        // the positioning frame is a REGULAR octagon of 8 hard beacon lights
+        // at radius half. The # lives inside it: edges at +-0.55*half, span
+        // +-0.62*half, swing capped so no strand ever crosses the octagon.
+        const float off = F.half * 0.55f;
+        const float reach = F.half * 0.58f;
+        GfxPoint oct[8];
+        for (int c = 0; c < 8; ++c) {
+            const float a = kPi / 8.f + c * kPi / 4.f;
+            oct[c] = pt(F.half * cosf(a), F.half * sinf(a));
+        }
+        // faint octagon rim: the boundary the helices must stay inside
+        for (int c = 0; c < 8; ++c) {
+            GfxPoint rim[2] = { oct[c], oct[(c + 1) % 8] };
+            gfx_polyline(rim, 2, LerpCol(t.frame, t.panel, 0.45f + fade * 0.4f), 1);
+        }
         const int ES = 24;                     // samples along each edge
+        // max swing that keeps the helix corner (reach, off+amp) inside the
+        // octagon circumradius with a small margin
+        const float maxAmp = std::max(2.f, std::sqrt(std::max(0.f,
+            F.half * F.half * 0.94f - reach * reach)) - off);
         for (int e = 0; e < 4; ++e) {
             const bool horiz = e < 2;
             const float eo = (e % 2) ? off : -off;
             auto edgePt = [&](float p, float q) -> GfxPoint {
                 return horiz ? pt(p, eo + q) : pt(eo + q, p);
             };
-            const float sideAmp = std::min(amp, reach * 0.3f);
+            const float sideAmp = std::min(amp, maxAmp);
             // base-pair bonds every 3rd sample
             for (int i = 0; i <= ES; i += 3) {
                 const float p = -reach + 2.f * reach * i / ES;
@@ -1388,22 +1396,17 @@ void PaintDiveLayout() {
             gfx_polyline(sA, ES + 1, strandA, w);
             gfx_polyline(sB, ES + 1, strandB, w);
         }
-        // soft breathing beacons: three layered alpha squares approximate a
-        // glow; brightness follows a slow sine per layer, no hard on/off
+        // aviation obstruction lights: HARD squares, hard on/off blink
+        // (2 beats on, 1 beat off), each layer on its own phase
         {
-            const float phase = float(g_state->tick) / 60.f * 2.f * kPi / 2.4f + k * 0.9f;
-            const float breath = 0.5f + 0.5f * sinf(phase);
-            const COLORREF glow = depth < 0.5f ? t.stripHot
-                : LerpCol(t.stripHot, t.panel, 0.35f);
-            for (int c = 0; c < 8; ++c) {
-                const int bx = beacons[c].x, by = beacons[c].y;
-                const int core = depth < 0.5f ? 1 : 2;
-                AlphaFill(bx - core - 4, by - core - 4, bx + core + 5, by + core + 5,
-                          glow, int(26 * breath));
-                AlphaFill(bx - core - 2, by - core - 2, bx + core + 3, by + core + 3,
-                          glow, int(60 * breath));
-                AlphaFill(bx - core, by - core, bx + core + 1, by + core + 1,
-                          glow, int(120 + 120 * breath));
+            const bool lit = ((g_state->tick / 20 + k) % 3) != 0;
+            if (lit) {
+                const COLORREF mark = LerpCol(t.stripHot, t.panel, fade * 0.5f);
+                for (int c = 0; c < 8; ++c) {
+                    const int ms = depth < 0.5f ? 2 : 3;
+                    FillRectCol(oct[c].x - ms, oct[c].y - ms,
+                                oct[c].x + ms + 1, oct[c].y + ms + 1, mark);
+                }
             }
         }
     }
