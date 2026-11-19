@@ -1433,27 +1433,36 @@ void PaintHelixLayout() {
         return history[slot] + (history[(slot + H - 1) % H] - history[slot]) * (pos - i);
     };
     struct CoilPoint { float x, y, z; };
-    auto coil = [&](int y, int side) -> CoilPoint {
+    auto coil = [&](float y, int side, int strand) -> CoilPoint {
         const float age = float(y - wt) / pitch - float(phase);
         const double row = (y - wt) / double(pitch) - clock;
         const double orbit = row * .233 + side * 3.14159265;
-        const double turn = row * (side ? 1.51 : 1.62) + side * 1.9;
-        const float radius = 19.f + 25.f * levelAt(age, side);
+        const double turn = row * (side ? .84 : .92) + side * 1.9 + strand * 3.14159265;
+        const float radius = 17.f + 21.f * levelAt(age, side);
         // An oblique projection exposes the return arc of each winding.
         return {cx + float(65.*std::sin(orbit) + radius*std::sin(turn)),
-                y + float(.56*radius*std::cos(turn) + 4.*std::cos(orbit)),
+                y + float(.32*radius*std::cos(turn) + 4.*std::cos(orbit)),
                 float(.70*std::cos(orbit) + .30*std::cos(turn))};
     };
-    struct Stroke { CoilPoint a,b; int side; };
-    constexpr int step = 3, margin = 32;
-    Stroke strokes[2 * ((kLogicalH + 2 * margin) / step + 2)];
+    struct Stroke { CoilPoint a,b; int side; bool bond; };
+    constexpr int step = 3, margin = 32, stepsPerBond = 4;
+    constexpr int maxSteps = (kLogicalH + 2 * margin) / step + 2;
+    Stroke strokes[4 * maxSteps + 2 * (maxSteps / stepsPerBond + 1)];
     int used = 0;
+    // Anchor the rungs to the moving strands so the bonds descend with them.
+    const float shift = float(std::fmod(clock * pitch, step * stepsPerBond));
     for (int side = 0; side < 2; ++side) {
-        CoilPoint prev = coil(wt - margin, side);
-        for (int y = wt - margin + step; y <= wb + margin; y += step) {
-            const CoilPoint end = coil(y, side);
-            strokes[used++] = {prev, end, side};
-            prev = end;
+        const float top = wt - margin + shift;
+        CoilPoint prev[] = {coil(top, side, 0), coil(top, side, 1)};
+        for (int j = 1; top + j * step <= wb + margin; ++j) {
+            const float y = top + j * step;
+            for (int strand = 0; strand < 2; ++strand) {
+                const CoilPoint end = coil(y, side, strand);
+                strokes[used++] = {prev[strand], end, side, false};
+                prev[strand] = end;
+            }
+            if (j % stepsPerBond == 0)
+                strokes[used++] = {prev[0], prev[1], side, true};
         }
     }
     std::sort(strokes, strokes + used, [](const Stroke& a, const Stroke& b) {
@@ -1463,9 +1472,10 @@ void PaintHelixLayout() {
         const Stroke& v = strokes[i];
         const float light = std::clamp(.5f + .25f * (v.a.z + v.b.z), 0.f, 1.f);
         const COLORREF pigment = v.side ? t.bar : LerpCol(t.wave,t.ink,.23f);
-        const COLORREF ink = LerpCol(pigment, CustomPanelCol(), .04f + .61f * (1.f-light));
+        const float fade = v.bond ? .35f + .38f * (1.f-light) : .04f + .61f * (1.f-light);
+        const COLORREF ink = LerpCol(pigment, CustomPanelCol(), fade);
         GfxPoint seg[] = {ScenePoint(v.a.x,v.a.y),ScenePoint(v.b.x,v.b.y)};
-        gfx_polyline(seg,2,ink,S(light>.64f ? 4 : light>.32f ? 3 : 2));
+        gfx_polyline(seg,2,ink,S(v.bond ? 1 : light>.58f ? 3 : 2));
     }
     gfx_pop_clip();
 
@@ -1706,8 +1716,9 @@ void PaintDiveLayout() {
                     const float prev = Lv((band + 42) % 43), nextLevel = Lv((band + 1) % 43);
                     const float u0 = float(m) / count, u1 = float(m + 1) / count;
                     const float crest = (m + .60f) / count;
-                    const float peak = .145f * level;
-                    const float held = .145f * stage::bandLevel(g_state->spectrum.barsPrev[band]);
+                    constexpr float toothReach = .215f;
+                    const float peak = toothReach * level;
+                    const float held = toothReach * stage::bandLevel(g_state->spectrum.barsPrev[band]);
                     const GfxPoint root = sidePoint(crest, 0.f);
                     const GfxPoint tip = sidePoint(crest, peak);
                     const GfxPoint left = sidePoint(u0, .044f * std::min(prev, level));
