@@ -342,23 +342,23 @@ function hitLayout(x,y){
     return null;
   }
   if(layoutMode===3){ // RING: outer tick ring selects a track
-    const dx=x-320,dy=y-232,r2=dx*dx+dy*dy;
+    const dx=x-320,dy=y-236,r2=dx*dx+dy*dy;
     if(r2>=170*170&&r2<=230*230){
       let a=Math.atan2(dy,dx)+Math.PI/2;if(a<0)a+=2*Math.PI;
       return Math.round(a/(2*Math.PI)*names.length)%names.length;
     }
     return null;
   }
-  if(layoutMode===4){ // CROSS: EXIT label in the bottom-right quadrant
-    if(x>=348&&x<396&&y>=396&&y<414)return "exit";
+  if(layoutMode===4){ // CROSS: EXIT label in the bottom-right transport bay
+    if(x>=432&&x<480&&y>=344&&y<362)return "exit";
     return null;
   }
   return null; // FIELD / HELIX use the TAB grid / keyboard
 }
 // Progress rails of the custom layouts: [x0,x1,y0,y1] hit bands.
-// Shared chassis footer rail (y 454..457) for FIELD/STACK; CROSS/SINK/DIVE
-// keep their legacy bands until their own rebuild lands.
-const LAYOUT_SEEK={1:[16,624,448,462],2:[16,624,448,462],4:[348,452,346,362],6:[24,616,468,480]};
+// Shared chassis footer rail (y 454..457) for FIELD/STACK/RING/CROSS;
+// SINK/DIVE keep their legacy bands until their own rebuild lands.
+const LAYOUT_SEEK={1:[16,624,448,462],2:[16,624,448,462],3:[16,624,448,462],4:[16,624,448,462],6:[24,616,468,480]};
 function seekLayout(f){
   if(!buffer)return;
   offset=Math.max(0,Math.min(1,f))*buffer.duration;

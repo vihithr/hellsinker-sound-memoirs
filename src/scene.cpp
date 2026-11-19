@@ -835,33 +835,42 @@ void PaintStackLayout() {
 }
 
 // ---- composition: circular instrument dial -------------------------------
-// A real radial spectrum: 43 solid wedges grow out of a base ring, a progress
-// arc sweeps the inner dial, and the centre carries a large XY phase figure
-// with a one-frame afterglow. The former dot-string version covered ~3% of
-// the screen; the wedges alone carry an order of magnitude more ink.
+// One radial spectrum, no second one: 43 solid hard-edge wedges (4-point
+// trapezoid segments, 3px radial block + 2px gap, 70% angular duty) grow out
+// of a continuous base ring. The centre carries the XY phase figure; the
+// outer rim keeps only the 46 track ticks. Corners stay sparse on purpose.
 void PaintRingLayout() {
     const Theme& t = Th();
     const float kPi = 3.14159265f;
     const float imp = Impact();
-    const int cx = 320, cy = 232;
+    const float spark = g_mem ? g_mem->highSpark : 0.f;
+    const int cx = 320, cy = 236;
     FillRectCol(0, 0, S(kLogicalW), S(kLogicalH), t.outer);
 
     auto dot = [&](float a, int r, int half, COLORREF c) {
         const int x = cx + int(r * cosf(a)), y = cy + int(r * sinf(a));
         FillRectCol(S(x - half), S(y - half), S(x + half + 1), S(y + half + 1), c);
     };
-    auto ringDots = [&](int radius, COLORREF c, int segs, int half) {
-        for (int i = 0; i < segs; ++i)
-            dot(2.f * kPi * i / segs, radius, half, c);
+    // continuous closed ring (96-segment polyline, no dot-string breaks)
+    auto ringLine = [&](int radius, COLORREF c) {
+        GfxPoint pts[97];
+        for (int i = 0; i <= 96; ++i) {
+            const float a = 2.f * kPi * i / 96;
+            pts[i] = { (std::int16_t)S(cx + int(radius * cosf(a))),
+                       (std::int16_t)S(cy + int(radius * sinf(a))) };
+        }
+        gfx_polyline(pts, 97, c, 1);
     };
 
-    // dial furniture: base ring under the wedges, outer boundary, tick marks
-    ringDots(104, LerpCol(t.frame, t.outer, 0.10f), 200, 0);
-    ringDots(196, LerpCol(t.seam, t.ink, 0.45f), 240, 0);
+    // dial furniture: continuous base + boundary rings, 12 radial ticks
+    ringLine(104, LerpCol(t.frame, t.outer, 0.10f));
+    ringLine(196, LerpCol(t.seam, t.ink, 0.45f));
     for (int i = 0; i < 12; ++i) {
         const float a = 2.f * kPi * i / 12;
-        for (int r = 188; r <= 196; r += 2)
-            dot(a, r, 0, LerpCol(t.frame, t.outer, 0.15f));
+        GfxPoint seg[2] = {
+            { (std::int16_t)S(cx + int(188 * cosf(a))), (std::int16_t)S(cy + int(188 * sinf(a))) },
+            { (std::int16_t)S(cx + int(196 * cosf(a))), (std::int16_t)S(cy + int(196 * sinf(a))) } };
+        gfx_polyline(seg, 2, LerpCol(t.frame, t.outer, 0.15f), 1);
     }
 
     // progress arc: sweeps the inner dial as the track plays
@@ -880,40 +889,33 @@ void PaintRingLayout() {
         }
     }
 
-    // 43 radial wedges, starting at 12 o'clock: discrete 3x3 blocks at 4px
-    // pitch (2px block + 2px gap, the segmented language of the original
-    // window). Current level in bar, decay tail in barLit. A beat pushes the
-    // whole ring outward and heats the base blocks toward accentHot.
+    // 43 solid radial wedge segments: each segment is a 4-point trapezoid
+    // (r..r+3, 70% of the angular step). Level in bar, decay tail in barLit;
+    // a beat expands the base ring and heats the innermost two segments.
     const int bands = memoirs::kSpectrumBands;
     const int r0 = 108 + int(imp * 8.f);
-    const COLORREF baseCol = imp > 0.06f ? LerpCol(t.bar, t.accentHot, std::min(1.f, imp * 1.2f)) : t.bar;
+    const float step = 2.f * kPi / bands;
+    const float hw = step * 0.35f;
+    const bool beat = imp > 0.08f;
+    auto wedge = [&](float a, int r, COLORREF c) {
+        const float c0 = cosf(a - hw), s0 = sinf(a - hw);
+        const float c1 = cosf(a + hw), s1 = sinf(a + hw);
+        GfxPoint q[4] = {
+            { (std::int16_t)S(cx + int(r * c0)),       (std::int16_t)S(cy + int(r * s0)) },
+            { (std::int16_t)S(cx + int((r + 3) * c0)), (std::int16_t)S(cy + int((r + 3) * s0)) },
+            { (std::int16_t)S(cx + int((r + 3) * c1)), (std::int16_t)S(cy + int((r + 3) * s1)) },
+            { (std::int16_t)S(cx + int(r * c1)),       (std::int16_t)S(cy + int(r * s1)) } };
+        gfx_polygon(q, 4, c);
+    };
     for (int k = 0; k < bands; ++k) {
         const float lv = Lv(k);
-        const float a = -kPi / 2.f + 2.f * kPi * k / bands;
+        const float a = -kPi / 2.f + step * k;
         const int len = int(lv * 84.f);
-        for (int r = r0; r < r0 + len; r += 4)
-            dot(a, r, 1, r < r0 + 12 ? baseCol : t.bar);
+        for (int r = r0; r < r0 + len; r += 5)
+            wedge(a, r, beat && r < r0 + 10 ? t.accentHot : t.bar);
         const int prevLen = int(stage::bandLevel(g_state->spectrum.barsPrev[k]) * 84.f);
-        for (int r = r0 + len; r < r0 + prevLen; r += 4)
-            dot(a, r, 1, t.barLit);
-    }
-
-    // outer waveform ring: the live L/R traces ride the boundary circle, so
-    // the rim itself is alive instead of a static dotted guide
-    {
-        const float reach = 8.f + imp * 6.f;
-        for (int side = 0; side < 2; ++side) {
-            const float* wv = side ? g_state->spectrum.waveR : g_state->spectrum.waveL;
-            GfxPoint pts[121];
-            for (int i = 0; i <= 120; ++i) {
-                const float a = -kPi / 2.f + 2.f * kPi * i / 120;
-                const float v = std::clamp(wv[(i % 120) * 2] / 64.f, -1.f, 1.f);
-                const int r = 196 + int(v * reach);
-                pts[i] = { (std::int16_t)S(cx + int(r * cosf(a))),
-                           (std::int16_t)S(cy + int(r * sinf(a))) };
-            }
-            gfx_polyline(pts, 121, side ? LerpCol(t.wave, t.outer, 0.30f) : t.wave, 1);
-        }
+        for (int r = r0 + len; r < r0 + prevLen; r += 5)
+            wedge(a, r, t.barLit);
     }
 
     // centre: large XY phase figure with a dim afterglow of the previous trace
@@ -924,7 +926,6 @@ void PaintRingLayout() {
                              {(std::int16_t)S(cx - 80), (std::int16_t)S(cy)},
                              {(std::int16_t)S(cx), (std::int16_t)S(cy - 72)} };
         gfx_polyline(frame, 5, LerpCol(t.frame, t.outer, 0.20f), 1);
-        // XY figure driven by the smoothed auto-gain, same as the PHASE stage
         const float g = g_mem ? g_mem->xyGain : 1.f;
         if (g_mem && g_mem->samples > 0) {
             const int prev = (g_mem->trace + 5) % 6;
@@ -944,172 +945,211 @@ void PaintRingLayout() {
         }
         gfx_polyline(pts2, 120, t.bar, 1);
         FillRectCol(S(cx - 1), S(cy - 1), S(cx + 2), S(cy + 2), t.frame);
+        // HF transient: crosshair pips light the four diamond vertices
+        if (spark > 0.2f) {
+            FillRectCol(S(cx - 1), S(cy - 73), S(cx + 2), S(cy - 70), t.accentHot);
+            FillRectCol(S(cx + 78), S(cy - 1), S(cx + 81), S(cy + 2), t.accentHot);
+            FillRectCol(S(cx - 1), S(cy + 70), S(cx + 2), S(cy + 73), t.accentHot);
+            FillRectCol(S(cx - 81), S(cy - 1), S(cx - 78), S(cy + 2), t.accentHot);
+        }
     }
 
-    // 46 track ticks on the outside: playing pulses, selected enlarges
+    // 46 track ticks on the outside: selected 3x3 selEdge, playing 5x5
+    // accentHot with a 1px box; idle ticks stay small and quiet
     const bool blink = (g_state->tick % 30) < 20;
     for (int i = 0; i < kTrackCount; ++i) {
         const float a = -kPi / 2.f + 2.f * kPi * i / kTrackCount;
         const bool sel = g_state->selected == i;
         const bool playing = g_state->current == i;
-        const int half = playing ? 3 : sel ? 2 : 1;
-        COLORREF c = LerpCol(t.seam, t.ink, 0.45f);
-        if (sel) c = t.selEdge;
-        if (playing) c = blink ? t.accentHot : t.bar;
-        dot(a, 206, half, c);
+        if (playing) {
+            const int x = cx + int(206 * cosf(a)), y = cy + int(206 * sinf(a));
+            FillRectCol(S(x - 4), S(y - 4), S(x + 5), S(y + 5), t.frame);
+            FillRectCol(S(x - 2), S(y - 2), S(x + 3), S(y + 3),
+                        blink ? t.accentHot : t.bar);
+        } else {
+            dot(a, 206, sel ? 1 : 0,
+                sel ? t.selEdge : LerpCol(t.seam, t.ink, 0.45f));
+        }
     }
 
-    DrawCells("SOUND MEMOIRS", 24, 14, 0);
-    { const char* nm = t.name; DrawCells(nm, 616 - (int)strlen(nm) * 8, 14, 2); }
-    DrawCells(TransportWord(), 24, 30, g_state->current >= 0 && !g_state->libPaused ? 0 : 2);
-    {
-        char b[24];
-        snprintf(b, sizeof(b), "TIME:%03d", std::max(0, int(g_state->seconds)));
-        DrawCells(b, 616 - (int)strlen(b) * 8, 30, 3);
-    }
-    // corner instrument blocks fill the dead space around the dial:
-    // L/R envelope columns on the left, band ladder + order on the right
+    // bottom-left: compact 8px twin vertical meters with peak-hold ticks
     for (int side = 0; side < 2; ++side) {
-        const int x = 24 + side * 18;
+        const int x = 24 + side * 14;
         const float drive = std::clamp(g_state->wing[side], 0.f, 1.f);
         const int n = int(drive * 26);
         for (int i = 0; i < n; ++i) {
-            const int y = 400 - i * 6;
-            FillRectCol(S(x), S(y - 4), S(x + 10), S(y),
+            const int y = 428 - i * 6;
+            FillRectCol(S(x), S(y - 4), S(x + 8), S(y),
                         i > 19 ? t.accentHot : t.strip);
         }
-        DrawCells(side ? "R" : "L", x + 1, 410, 2);
-    }
-    {
-        const int lx = 566, ly = 96;
-        for (int k = 0; k < 22; ++k) {
-            const int y = ly + k * 8;
-            const int w = int(Lv(k * 2) * 46);
-            if (w > 0) FillRectCol(S(lx), S(y), S(lx + w), S(y + 3), t.bar);
-            const int pw = int(stage::bandLevel(g_state->spectrum.barsPrev[k * 2]) * 46);
-            if (pw > w) FillRectCol(S(lx + w), S(y), S(lx + pw), S(y + 3), t.barLit);
+        if (g_mem && g_mem->meterPeak[side] > 0.02f) {
+            const int py = 428 - int(g_mem->meterPeak[side] * 156.f);
+            FillRectCol(S(x), S(py - 2), S(x + 8), S(py), t.accentHot);
         }
-        DrawCells("BAND", lx, 84, 2);
-        static const char* orders[4] = { "ORDER", "ONE", "LOOP", "SHUFFLE" };
-        DrawCells(orders[g_state->localOrder % 4], lx, 286, 2);
+        DrawCells(side ? "R" : "L", x, 438, 2);
     }
+    // bottom-right: three clean readout rows, nothing else
     {
-        char b[16];
+        const int lx = 548;
+        char b[24];
         snprintf(b, sizeof(b), "TR:%02d", std::max(0, g_state->selected));
-        DrawCells(b, cx - (int)strlen(b) * 4, 452, g_state->selected < kTrackCount ? 0 : 2);
+        DrawCells(b, lx, 396, g_state->selected < kTrackCount ? 0 : 2);
+        static const char* orders[4] = { "ORDER", "ONE", "LOOP", "SHUFFLE" };
+        DrawCells(orders[g_state->localOrder % 4], lx, 412, 2);
+        snprintf(b, sizeof(b), "PEAK:%02d", g_mem ? int(g_mem->meterPeak[0] * 99.f) : 0);
+        DrawCells(b, lx, 428, 3);
     }
-    DrawCells("F7 VISUAL / F9 LAYOUT", 24, 466, 2);
+
+    PaintCustomHeader("RING / 03");
+    PaintCustomFooter(false);
 }
 
-// ---- composition: four-quadrant instrument split --------------------------
-// The cross divides the screen into four working quadrants instead of leaving
-// them empty around a small centre figure: L scope / R scope on top, a
-// horizontal band ladder and the transport readout below. The XY diamond
-// belongs to RING now; the crosshair keeps only a small hub badge.
+// ---- composition: asymmetric precision cross ------------------------------
+// 65/35 vertical split (axis x=416), 62/38 horizontal split (axis y=292):
+// the top-left 43-band spectrum is the undisputed protagonist; top-right a
+// large square XY scope; bottom-left stacked full-width L/R scopes;
+// bottom-right a spacious transport bay. No duplicated instruments.
 void PaintCrossLayout() {
     const Theme& t = Th();
     FillRectCol(0, 0, S(kLogicalW), S(kLogicalH), t.outer);
-
-    const int cx = 320, cy = 240;
     const float imp = Impact();
-    const COLORREF axis = imp > 0.06f
-        ? LerpCol(t.frame, t.accentHot, std::min(1.f, imp * 1.3f))
-        : LerpCol(t.frame, t.outer, 0.25f);
-    FillRectCol(S(cx - 1), S(40), S(cx + 2), S(456), axis);
-    FillRectCol(S(24), S(cy - 1), S(616), S(cy + 2), axis);
-    for (int y = 56; y < 456; y += 32) {
+    const float spark = g_mem ? g_mem->highSpark : 0.f;
+
+    const int cx = 416, cy = 292;
+    // main axes: 1px at rest, 3px accentHot step on a beat
+    const int aw = imp > 0.08f ? 3 : 1;
+    const COLORREF axis = imp > 0.08f ? t.accentHot : LerpCol(t.frame, t.outer, 0.25f);
+    FillRectCol(S(cx - aw / 2), S(34), S(cx - aw / 2 + aw), S(446), axis);
+    FillRectCol(S(16), S(cy - aw / 2), S(624), S(cy - aw / 2 + aw), axis);
+    for (int y = 50; y < 446; y += 32) {
         FillRectCol(S(cx - 5), S(y), S(cx - 1), S(y + 1), t.seam);
         FillRectCol(S(cx + 1), S(y), S(cx + 5), S(y + 1), t.seam);
     }
-    for (int x = 40; x < 616; x += 32) {
+    for (int x = 32; x < 624; x += 32) {
         FillRectCol(S(x), S(cy - 5), S(x + 1), S(cy - 1), t.seam);
         FillRectCol(S(x), S(cy + 1), S(x + 1), S(cy + 5), t.seam);
     }
 
-    // top quadrants: full-width channel scopes, one per side
-    for (int side = 0; side < 2; ++side) {
-        const float* wv = side ? g_state->spectrum.waveR : g_state->spectrum.waveL;
-        const int x0 = side ? 336 : 28, span = 268;
-        const int midY = 148;
-        FillRectCol(S(x0), S(midY), S(x0 + span), S(midY + 1),
-                    LerpCol(t.seam, t.outer, 0.30f));
-        GfxPoint pts[120];
+    // ---- top-left protagonist: large 43-band vertical spectrum ------------
+    {
+        const int lx = 16, rx = 408, baseY = 262;
+        const COLORREF ref = LerpCol(t.seam, t.outer, 0.30f);
+        for (int r = 0; r < 3; ++r) {
+            const int y = baseY - 60 * (r + 1);
+            for (int x = lx + 8; x < rx - 8; x += 8)
+                FillRectCol(S(x), S(y), S(x + 2), S(y + 1), ref);
+        }
+        const int cols = memoirs::kSpectrumBands;
+        const int pitch = 9, barW = 7;
+        const int x0 = lx + ((rx - lx) - cols * pitch) / 2;
+        for (int k = 0; k < cols; ++k) {
+            const float lv = Lv(k);
+            const int x1 = x0 + k * pitch, x2 = x1 + barW;
+            const int up = int(lv * 204);
+            for (int y = baseY - up; y < baseY; y += 3)
+                FillRectCol(S(x1), S(y), S(x2), S(std::min(y + 2, baseY)), t.bar);
+            const int prevUp = int(stage::bandLevel(g_state->spectrum.barsPrev[k]) * 204);
+            for (int y = baseY - prevUp; y < baseY - up; y += 3)
+                FillRectCol(S(x1), S(y), S(x2), S(std::min(y + 2, baseY - up)), t.barLit);
+        }
+        if (imp > 0.08f)
+            FillRectCol(S(lx + 4), S(baseY), S(rx - 4), S(baseY + 3), t.accentHot);
+        else
+            FillRectCol(S(lx + 4), S(baseY), S(rx - 4), S(baseY + 1),
+                        LerpCol(t.frame, t.outer, 0.35f));
+        for (int i = 0; i < 8; ++i) {
+            const int x = 34 + i * 52;
+            FillRectCol(S(x), S(baseY + 3), S(x + 1), S(baseY + 8),
+                        spark > 0.15f ? t.accentHot : LerpCol(t.frame, t.outer, 0.45f));
+            const int len = (int)strlen(kFreqLabel[i]);
+            DrawCells(kFreqLabel[i], x - 4 * len + 4, baseY + 11, 4);
+        }
+        DrawCells("43 BAND", lx + 4, 40, 2);
+    }
+
+    // ---- top-right: large square XY phase scope (19px grid + afterglow) ---
+    {
+        const int wx = 424, wy = 60, wr = 624, wb = 260;
+        InsetPanel(wx, wy, wr, wb);
+        const int mx = (wx + wr) / 2, my = (wy + wb) / 2;
+        const COLORREF grid = LerpCol(t.seam, t.panel, 0.30f);
+        for (int j = -5; j <= 5; ++j) {
+            const int y = my + j * 19;
+            if (y > wy + 2 && y < wb - 3)
+                FillRectCol(S(wx + 3), S(y), S(wr - 3), S(y + 1), grid);
+        }
+        for (int j = -5; j <= 5; ++j) {
+            const int x = mx + j * 19;
+            if (x > wx + 2 && x < wr - 3)
+                FillRectCol(S(x), S(wy + 3), S(x + 1), S(wb - 3), grid);
+        }
+        const float g = g_mem ? g_mem->xyGain : 1.f;
+        if (g_mem && g_mem->samples > 0) {
+            const int prev = (g_mem->trace + 5) % 6;
+            GfxPoint ghost[120];
+            for (int i = 0; i < 120; ++i) {
+                const GfxPoint& p = g_mem->traces[prev][i];
+                ghost[i] = { (std::int16_t)S(mx + ClampI(int(p.x * g), -94, 94)),
+                             (std::int16_t)S(my - ClampI(int(p.y * g), -92, 92)) };
+            }
+            gfx_polyline(ghost, 120, DepthInk(t.wave, 0.55f), 1);
+        }
+        GfxPoint xy[120];
         for (int i = 0; i < 120; ++i) {
-            const float v = std::clamp(wv[i * 2] / 64.0f, -1.f, 1.f);
-            pts[i].x = (std::int16_t)S(x0 + i * span / 119);
-            pts[i].y = (std::int16_t)S(midY + int(v * 72));
+            const float l = g_state->spectrum.waveL[i * 2], r = g_state->spectrum.waveR[i * 2];
+            xy[i] = { (std::int16_t)S(mx + ClampI(int((l - r) * .92f * g), -94, 94)),
+                      (std::int16_t)S(my - ClampI(int((l + r) * .72f * g), -92, 92)) };
         }
-        gfx_polyline(pts, 120, side ? LerpCol(t.wave, t.bar, 0.40f) : t.wave, 2);
-        DrawCells(side ? "CH : R" : "CH : L", x0 + 2, 60, 2);
-        // quadrant corner bracket
-        const int bx = side ? 604 : 28, dir = side ? -1 : 1;
-        FillRectCol(S(bx), S(52), S(bx + dir * 12), S(53), t.frame);
-        FillRectCol(S(bx), S(52), S(bx + dir), S(64), t.frame);
+        gfx_polyline(xy, 120, t.bar, 1);
+        FillRectCol(S(mx - 1), S(my - 1), S(mx + 2), S(my + 2), t.frame);
+        DrawCells("XY PHASE", wx + 6, wy + 6, 2);
+        if (spark > 0.2f)
+            FillRectCol(S(wr - 10), S(wy + 6), S(wr - 6), S(wy + 10), t.accentHot);
     }
 
-    // bottom-left: 43-band horizontal ladder, low frequencies at the top
+    // ---- bottom-left: stacked full-width L / R scopes ----------------------
     {
-        const int lx = 36, ly = 260, rowH = 4, maxW = 252;
-        for (int k = 0; k < memoirs::kSpectrumBands; ++k) {
-            const int y = ly + k * rowH;
-            const int w = int(Lv(k) * maxW);
-            if (w > 0)
-                FillRectCol(S(lx), S(y), S(lx + w), S(y + 2), t.bar);
-            const int pw = int(stage::bandLevel(g_state->spectrum.barsPrev[k]) * maxW);
-            if (pw > w)
-                FillRectCol(S(lx + w), S(y), S(lx + pw), S(y + 2), t.barLit);
+        GfxPoint pts[120];
+        for (int side = 0; side < 2; ++side) {
+            const float* wv = side ? g_state->spectrum.waveR : g_state->spectrum.waveL;
+            const int midY = side ? 408 : 336;
+            FillRectCol(S(64), S(midY), S(404), S(midY + 1),
+                        LerpCol(t.seam, t.outer, 0.30f));
+            for (int i = 0; i < 120; ++i) {
+                const float v = std::clamp(wv[i * 2] / 64.0f, -1.f, 1.f);
+                pts[i].x = (std::int16_t)S(64 + i * 340 / 119);
+                pts[i].y = (std::int16_t)S(midY + int(v * 30));
+            }
+            gfx_polyline(pts, 120, side ? LerpCol(t.wave, t.bar, 0.40f) : t.wave, 2);
+            DrawCells(side ? "CH:R" : "CH:L", 18, midY - 5, 2);
         }
-        DrawCells("43 BAND", lx, 444, 2);
     }
 
-    // bottom-right: transport readout panel
+    // ---- bottom-right: spacious transport bay ------------------------------
     {
-        const int px = 348;
-        DrawCells(TransportWord(), px, 268, g_state->current >= 0 && !g_state->libPaused ? 0 : 2);
+        const int px = 432;
+        DrawCells(TransportWord(), px, 306, g_state->current >= 0 && !g_state->libPaused ? 0 : 2);
         {
             char b[24];
             snprintf(b, sizeof(b), "TR:%02d", std::max(0, g_state->current));
-            DrawCells(b, px, 288, g_state->current >= 0 ? 0 : 2);
+            DrawCells(b, px, 326, g_state->current >= 0 ? 0 : 2);
+            static const char* orders[4] = { "ORDER", "ONE", "LOOP", "SHUFFLE" };
+            DrawCells(orders[g_state->localOrder % 4], px + 72, 326, 2);
         }
-        {
-            char b[32];
-            const int secs = std::max(0, int(g_state->seconds));
-            snprintf(b, sizeof(b), "%02d:%02d", secs / 60, secs % 60);
-            DrawCells(b, px, 308, 3);
-        }
-        if (g_state->current == kTrackCount && g_state->libCurrentRow >= 0 &&
-            g_state->libCurrentRow < g_libNameCount && g_libNames[g_state->libCurrentRow][0]) {
-            textLib(g_libNames[g_state->libCurrentRow], px, 326, 612, 342, t.digit);
-        }
-        // progress rail with playhead
-        FillRectCol(S(px), S(352), S(452), S(356), t.seam);
-        const int end = px + int(104 * PlayProgress());
-        if (end > px) FillRectCol(S(px), S(352), S(end), S(356), t.bar);
-        if (g_state->current >= 0)
-            FillRectCol(S(end - 1), S(350), S(end + 2), S(358), t.accentHot);
-        static const char* orders[4] = { "ORDER", "ONE", "LOOP", "SHUFFLE" };
-        DrawCells(orders[g_state->localOrder % 4], px, 372, 2);
-        DrawCells("EXIT", px, 400, g_state->selected == kExitIndex ? 1 : 2);
-        // mini XY phase window fills the rest of the quadrant
-        {
-            const int wx = 470, wy = 330, wr = 606, wb = 436;
-            InsetPanel(wx, wy, wr, wb);
-            const int mx = (wx + wr) / 2, my = (wy + wb) / 2;
-            FillRectCol(S(wx + 4), S(my), S(wr - 4), S(my + 1), LerpCol(t.seam, t.panel, 0.3f));
-            FillRectCol(S(mx), S(wy + 4), S(mx + 1), S(wb - 4), LerpCol(t.seam, t.panel, 0.3f));
-            const float g = g_mem ? g_mem->xyGain : 1.f;
-            GfxPoint xy[120];
-            for (int i = 0; i < 120; ++i) {
-                const float l = g_state->spectrum.waveL[i * 2], r = g_state->spectrum.waveR[i * 2];
-                xy[i] = { (std::int16_t)S(mx + ClampI(int((l - r) * .92f * g * .75f), -62, 62)),
-                          (std::int16_t)S(my - ClampI(int((l + r) * .72f * g * .75f), -48, 48)) };
+        DrawCells("EXIT", px, 348, g_state->selected == kExitIndex ? 1 : 2);
+        // horizontal L/R level bars with hard peak-hold ticks
+        for (int side = 0; side < 2; ++side) {
+            const int y = 396 + side * 20;
+            const float drive = std::clamp(g_state->wing[side], 0.f, 1.f);
+            FillRectCol(S(px + 24), S(y), S(616), S(y + 6), LerpCol(t.seam, t.outer, 0.30f));
+            const int w = int(drive * 160.f);
+            if (w > 0) FillRectCol(S(px + 24), S(y), S(px + 24 + w), S(y + 6), t.strip);
+            if (g_mem && g_mem->meterPeak[side] > 0.02f) {
+                const int pxx = px + 24 + int(g_mem->meterPeak[side] * 160.f);
+                FillRectCol(S(pxx), S(y - 2), S(pxx + 2), S(y + 8), t.accentHot);
             }
-            gfx_polyline(xy, 120, t.bar, 1);
-            DrawCells("XY", wx + 4, wy + 10, 2);
+            DrawCells(side ? "R" : "L", px, y - 2, 2);
         }
-        // quadrant corner bracket
-        FillRectCol(S(592), S(440), S(604), S(441), t.frame);
-        FillRectCol(S(603), S(428), S(604), S(441), t.frame);
     }
 
     // hub: small diamond badge where the axes cross
@@ -1125,14 +1165,8 @@ void PaintCrossLayout() {
             FillRectCol(S(cx - 2), S(cy - 2), S(cx + 3), S(cy + 3), t.bar);
     }
 
-    DrawCells("SOUND MEMOIRS", 24, 20, 0);
-    { const char* nm = t.name; DrawCells(nm, 616 - (int)strlen(nm) * 8, 20, 2); }
-    DrawCells("TAB GRID / F9 LAYOUT", 24, 466, 2);
-    {
-        char b[24];
-        snprintf(b, sizeof(b), "SEL:TR:%02d", std::max(0, g_state->selected));
-        DrawCells(b, 616 - (int)strlen(b) * 8, 466, 2);
-    }
+    PaintCustomHeader("CROSS / 04");
+    PaintCustomFooter(true);
 
     if (g_state->showGridOverlay) {
         AlphaFill(0, 0, S(kLogicalW), S(kLogicalH), RGB(10, 12, 16), 0x8C);
