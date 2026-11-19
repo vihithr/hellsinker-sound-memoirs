@@ -1,9 +1,25 @@
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
+/* Chrome colors follow the active player theme (app.js sets these from
+   palettes.json); defaults match the ORIGINAL theme. */
+:root {
+  --chrome-bg: rgba(12,20,30,.9);
+  --chrome-border: #84e6e0;
+  --chrome-btn: rgba(20,32,44,.85);
+  --chrome-btn-hover: rgba(40,60,80,.95);
+  --chrome-ink: #dfe;
+  --chrome-accent: #cc3219;
+  --halo: rgba(132,230,224,.10);
+}
 body {
   background: #000;
   display: flex; align-items: center; justify-content: center;
   overflow: hidden; user-select: none;
+}
+/* faint theme-tinted halo so the 4:3 screen does not hard-cut into black */
+body::before {
+  content: ""; position: fixed; inset: 0; pointer-events: none;
+  background: radial-gradient(ellipse 70% 60% at 50% 50%, var(--halo), transparent 75%);
 }
 #stage {
   position: relative;
@@ -23,25 +39,25 @@ body {
   display: none;
   flex-direction: column; gap: 5px;
   padding: 10px 5px; max-height: 92vh;
-  border: 1px solid #7a9; border-right: none; border-radius: 7px 0 0 7px;
-  background: rgba(12,20,30,.9);
+  border: 1px solid var(--chrome-border); border-right: none; border-radius: 7px 0 0 7px;
+  background: var(--chrome-bg);
   z-index: 6;
 }
 #aux.visible { display: flex; }
 #aux button {
   width: 38px; height: 38px; border-radius: 5px;
-  border: 1px solid #7a9; background: rgba(20,32,44,.85); color: #dfe;
+  border: 1px solid var(--chrome-border); background: var(--chrome-btn); color: var(--chrome-ink);
   font-size: 18px; line-height: 1; cursor: pointer;
 }
-#aux button:hover { background: rgba(40,60,80,.95); }
+#aux button:hover { background: var(--chrome-btn-hover); border-color: var(--chrome-accent); }
 #help {
   position: absolute; left: 4%; top: 6%; width: 92%;
   display: none; flex-direction: column; gap: 4px;
-  padding: 12px 14px; border: 1px solid #7a9; border-radius: 4px;
-  background: rgba(12,20,30,.92); color: #dfe;
+  padding: 12px 14px; border: 1px solid var(--chrome-border); border-radius: 4px;
+  background: var(--chrome-bg); color: var(--chrome-ink);
   font: 12px/1.5 "Segoe UI", Tahoma, sans-serif;
   pointer-events: none; z-index: 5;
 }
 #help.show { display: flex; animation: helpfade 5s ease forwards; }
-#help b { color: #8cf; letter-spacing: .08em; margin-bottom: 4px; }
+#help b { color: var(--chrome-accent); letter-spacing: .08em; margin-bottom: 4px; }
 @keyframes helpfade { 0%,70% { opacity: 1; } 100% { opacity: 0; } }

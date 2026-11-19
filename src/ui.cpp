@@ -927,7 +927,7 @@ void HandleLayoutMouse(HWND hwnd, int lx, int ly, bool dbl) {
         return;
     }
     if (mode == layout::Ring) {
-        const float dx = float(lx - 320), dy = float(ly - 236);
+        const float dx = float(lx - 320), dy = float(ly - 232);
         const float r2 = dx * dx + dy * dy;
         if (r2 >= 170.f * 170.f && r2 <= 230.f * 230.f) {
             const float kPi = 3.14159265f;
@@ -940,9 +940,9 @@ void HandleLayoutMouse(HWND hwnd, int lx, int ly, bool dbl) {
         }
         return;
     }
-    // Field / Cross: the crosshair EXIT label is always live; the TAB grid
-    // keeps the original coordinates so its hit test is the original one.
-    if (mode == layout::Cross && lx >= 24 && lx < 72 && ly >= 296 && ly < 314) {
+    // Field / Cross: the EXIT label is always live; the TAB grid keeps the
+    // original coordinates so its hit test is the original one.
+    if (mode == layout::Cross && lx >= 348 && lx < 396 && ly >= 396 && ly < 414) {
         if (dbl) PostMessageA(hwnd, WM_CLOSE, 0, 0);
         else { app.selected = kExitIndex; InvalidateRect(hwnd, NULL, FALSE); }
         return;

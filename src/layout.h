@@ -16,7 +16,8 @@ enum Mode : int {
     Field,        // full-frame oscilloscope field, no panel frame
     Stack,        // vertical three-column instrument rack
     Ring,         // circular instrument dial
-    Cross,        // crosshair / vector-display composition
+    Cross,        // four-quadrant instrument split
+    Helix,        // mechanical DNA drive shaft (visual-motion-roadmap.md)
     Count
 };
 

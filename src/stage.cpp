@@ -51,6 +51,37 @@ void Memory::advance(const memoirs::Spectrum& s,int id,double seconds,bool playi
     wing[0]=follow(wing[0],channelDrive(s.envL,s.waveL),dt,.030,.30);
     wing[1]=follow(wing[1],channelDrive(s.envR,s.waveR),dt,.030,.30);
 
+    // Peak-hold caps (custom layouts only; ORIGINAL keeps its own decay tail).
+    // The remap matches the painter's bandLevel(): noise floor + gamma so a
+    // medium passage no longer pins every bar near the top.
+    for(int i=0;i<43;i++){
+        const float lv=bandLevel(s.barsLevel[i]);
+        if(lv>=peak[i]){peak[i]=lv;peakAge[i]=0;}
+        else{
+            peakAge[i]++;
+            if(peakAge[i]>27)peak[i]=std::max(lv,peak[i]-0.9f*dt);
+        }
+    }
+    const float drive[2]={channelDrive(s.envL,s.waveL),channelDrive(s.envR,s.waveR)};
+    for(int c=0;c<2;c++){
+        if(drive[c]>=meterPeak[c]){meterPeak[c]=drive[c];meterAge[c]=0;}
+        else{
+            meterAge[c]++;
+            if(meterAge[c]>48)meterPeak[c]=std::max(drive[c],meterPeak[c]-0.55f*dt);
+        }
+    }
+
+    // HELIX: launch a torsion pulse on a fresh low attack, then walk it across
+    // the shaft (160 ms end to end). Sustained bass keeps tension but does not
+    // re-fire; the pulse decays after the head leaves the right bearing.
+    if(helixHead>=0){
+        helixHead+=dt/0.16f;
+        if(helixHead>1.35f){helixHead=-1;helixPulse=0;}
+    }else if(attack>0.30f && helixPulse<=0.05f){
+        helixHead=0;helixPulse=std::clamp(attack,0.f,1.f);
+    }
+    if(helixPulse>0 && helixHead<0)helixPulse=std::max(0.f,helixPulse-2.5f*dt);
+
     if(last>=0 && seconds>=last && seconds-last<.045)return;
     last=seconds;
     head=(head+1)%24; trace=(trace+1)%6; samples=std::min(24,samples+1);

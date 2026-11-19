@@ -140,7 +140,7 @@ const localFiles=new Map();  // norm(name) -> File, for browser-native decoding
 const fileKey=s=>s.toLowerCase().replaceAll("/","\\");
 let scrubbing=false,scrubFraction=0,next=0,fatal=null,ready=false,lastError="";
 const THEMES=["ORIGINAL","DARK","NEON","PAPER","BLUEPRINT"];
-const LAYOUTS=["ORIGINAL","FIELD","STACK","RING","CROSS"];
+const LAYOUTS=["ORIGINAL","FIELD","STACK","RING","CROSS","HELIX"];
 const ORDERS=["ORDER","ONE","LOOP","SHUFFLE"];
 const pending=new Map(),worker=new Worker("./worker.js",{type:"module"});
 
@@ -152,9 +152,25 @@ function request(op,args={}){return new Promise((resolve,reject)=>{
   if(fatal){reject(Error(fatal));return;}const id=++next;pending.set(id,{resolve,reject});worker.postMessage({id,op,...args});});}
 
 // ---- title / chrome -------------------------------------------------------
+// Side-rail / help chrome follows the active theme (values from palettes.json).
+const CHROME=[
+  {bg:"rgba(20,28,26,.88)",border:"#84e6e0",btn:"rgba(36,48,44,.85)",hover:"rgba(60,80,72,.95)",ink:"#e8f2ee",accent:"#e87828",halo:"rgba(132,230,224,.10)"}, // ORIGINAL
+  {bg:"rgba(10,13,18,.92)",border:"#3cdcd2",btn:"rgba(24,28,34,.9)",hover:"rgba(44,52,64,.95)",ink:"#dce1e6",accent:"#ff783c",halo:"rgba(60,220,210,.08)"},  // DARK
+  {bg:"rgba(8,10,18,.92)",border:"#00ffdc",btn:"rgba(14,18,30,.9)",hover:"rgba(30,26,54,.95)",ink:"#e6f0ff",accent:"#ff3cb4",halo:"rgba(255,60,180,.10)"},  // NEON
+  {bg:"rgba(238,232,218,.94)",border:"#5a6e64",btn:"rgba(222,216,202,.9)",hover:"rgba(200,192,172,.95)",ink:"#32302c",accent:"#aa3c1e",halo:"rgba(246,242,232,.12)"}, // PAPER
+  {bg:"rgba(16,32,50,.92)",border:"#88c8d8",btn:"rgba(25,53,79,.9)",hover:"rgba(42,74,104,.95)",ink:"#e6eff1",accent:"#f2c184",halo:"rgba(136,200,216,.10)"}, // BLUEPRINT
+];
+function applyChrome(){
+  const c=CHROME[theme]||CHROME[0],r=document.documentElement.style;
+  r.setProperty("--chrome-bg",c.bg);r.setProperty("--chrome-border",c.border);
+  r.setProperty("--chrome-btn",c.btn);r.setProperty("--chrome-btn-hover",c.hover);
+  r.setProperty("--chrome-ink",c.ink);r.setProperty("--chrome-accent",c.accent);
+  r.setProperty("--halo",c.halo);
+}
 function refreshTitle(){
   const t=THEMES[theme];
   document.title=`SOUND MEMOIRS  [VOL ${volume}] [${t}]`+(loading?"  [LOADING]":"");
+  applyChrome();
 }
 function markRailActivity(){railActivityTick=tick;wakeAux();}
 function switchPage(){switchTick=tick;}
@@ -271,7 +287,7 @@ function stepLocal(delta){
 function cycleTheme(){theme=(theme+1)%THEMES.length;refreshTitle();markRailActivity();}
 function cycleStage(){stageMode=(stageMode+1)%4;markRailActivity();}
 function cycleWing(){wingMode=(wingMode+1)%5;markRailActivity();}
-function cycleLayout(){layoutMode=(layoutMode+1)%5;showGridOverlay=false;markRailActivity();}
+function cycleLayout(){layoutMode=(layoutMode+1)%LAYOUTS.length;showGridOverlay=false;markRailActivity();}
 function selectPage(p){page=p;switchTick=tick;document.body.dataset.page=String(p);markRailActivity();}
 function adjustSetting(direction){
   switch(settingRow){
@@ -315,6 +331,38 @@ function hitTrack(x,y){
   return i<names.length?i:null;
 }
 function hitExit(x,y){return x>=156&&x<212&&y>=272&&y<288;}
+// Hit tests for the custom compositions (page 0). Returns a track index,
+// "exit", or null. Mirrors HandleLayoutMouse in the desktop shell.
+function hitLayout(x,y){
+  if(layoutMode===2){ // STACK: right-hand list, two columns of 23
+    if(x>=408&&x<624&&y>=40&&y<431){
+      const i=Math.floor((x-408)/108)*23+Math.floor((y-40)/17);
+      if(i>=0&&i<names.length)return i;
+    }
+    return null;
+  }
+  if(layoutMode===3){ // RING: outer tick ring selects a track
+    const dx=x-320,dy=y-232,r2=dx*dx+dy*dy;
+    if(r2>=170*170&&r2<=230*230){
+      let a=Math.atan2(dy,dx)+Math.PI/2;if(a<0)a+=2*Math.PI;
+      return Math.round(a/(2*Math.PI)*names.length)%names.length;
+    }
+    return null;
+  }
+  if(layoutMode===4){ // CROSS: EXIT label in the bottom-right quadrant
+    if(x>=348&&x<396&&y>=396&&y<414)return "exit";
+    return null;
+  }
+  return null; // FIELD / HELIX use the TAB grid / keyboard
+}
+// Progress rails of the custom layouts: [x0,x1,y0,y1] hit bands.
+const LAYOUT_SEEK={1:[24,616,432,446],2:[96,400,445,461],4:[348,608,346,362],5:[92,548,398,414]};
+function seekLayout(f){
+  if(!buffer)return;
+  offset=Math.max(0,Math.min(1,f))*buffer.duration;
+  if(source)start();
+  seekScrubMs=Math.round(offset*1000);
+}
 screen.addEventListener("click",e=>{
   const {x,y}=canvasPoint(e);
   // Channel rail (TR/LIB/SYS) sits at x 362..486, y 272..288 on every page.
@@ -338,11 +386,27 @@ screen.addEventListener("click",e=>{
     if(y>=283&&y<438){const row=Math.floor((y-283)/31);if(row>=0&&row<5){settingRow=row;if(x>=269&&x<296)adjustSetting(-1);else if(x>=462&&x<486)adjustSetting(1);markRailActivity();}return;}
     return;
   }
+  if(layoutMode!==0){
+    const h=hitLayout(x,y);
+    if(h==="exit"){stop();return;}
+    if(h!==null){select(h);activate();return;}
+    if(showGridOverlay){ // TAB grid keeps the original coordinates
+      if(hitExit(x,y)){stop();return;}
+      const i=hitTrack(x,y);if(i!==null){select(i);activate();}
+    }
+    return;
+  }
   if(hitExit(x,y)){stop();return;}
   const i=hitTrack(x,y);if(i!==null){select(i);activate();}
 });
 screen.addEventListener("dblclick",e=>{
   const {x,y}=canvasPoint(e);
+  if(layoutMode!==0&&page===0){
+    const h=hitLayout(x,y);
+    if(h==="exit"){stop();return;}
+    if(h!==null){select(h);activate();}
+    return;
+  }
   if(hitExit(x,y)){stop();return;}
   // Double-click a LIB row to play it (single click only moves the cursor).
   if(page===1&&y>=313&&y<439){
@@ -366,17 +430,30 @@ screen.addEventListener("pointerdown",e=>{
   screen.focus();markRailActivity();
   // Wide hit band so a finger can grab the 2px rail on a phone.
   if(page===1&&y>=258&&y<=278&&x>=150&&x<=490){
-    seeking=true;
+    seeking=true;seekBand=null;
     try{screen.setPointerCapture(e.pointerId);}catch(_){}
     seekFromX(x);
     e.preventDefault();
     return;
   }
+  // Custom-layout progress rails are scrubbable too.
+  if(page===0&&layoutMode!==0){
+    const b=LAYOUT_SEEK[layoutMode];
+    if(b&&x>=b[0]-6&&x<=b[1]+6&&y>=b[2]&&y<=b[3]){
+      seeking=true;seekBand=b;
+      try{screen.setPointerCapture(e.pointerId);}catch(_){}
+      seekLayout((x-b[0])/(b[1]-b[0]));
+      e.preventDefault();
+      return;
+    }
+  }
 });
+let seekBand=null;
 screen.addEventListener("pointermove",e=>{
   if(!seeking)return;
   const {x}=canvasPoint(e);
-  seekFromX(x);
+  if(seekBand)seekLayout((x-seekBand[0])/(seekBand[1]-seekBand[0]));
+  else seekFromX(x);
   e.preventDefault();
 });
 screen.addEventListener("pointerup",e=>{

@@ -28,7 +28,8 @@ const wchar_t* const kNames[Count][3] = {
     { L"Field", L"全幅场", L"全幅" },
     { L"Stack", L"三栏", L"三欄" },
     { L"Ring", L"环形", L"環状" },
-    { L"Cross", L"十字", L"十字" },
+    { L"Cross", L"四象限", L"四象限" },
+    { L"Helix", L"螺旋", L"螺旋" },
 };
 
 } // namespace

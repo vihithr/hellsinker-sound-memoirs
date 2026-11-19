@@ -93,7 +93,7 @@ for (let stage = 1; stage <= 3; stage++) {
   fill({ stage });
   results.push({ stage, ...render() });
 }
-for (let layout = 1; layout <= 4; layout++) {
+for (let layout = 1; layout <= 5; layout++) {
   fill({ layout, showGridOverlay: layout === 1 || layout === 4 ? 1 : 0 });
   results.push({ layout, ...render() });
 }

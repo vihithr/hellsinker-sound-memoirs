@@ -11,6 +11,7 @@
 #include "scene.h"
 #include "gfx.h"
 #include "layout.h"
+#include "stage.h"
 #include "themes.generated.h"
 #include "themed_art_runs.h"
 #include "core/game_tracks.h"
@@ -57,7 +58,32 @@ static inline int S(int v) { return (int)(v * g_sceneScale + 0.5f); }
 static inline int Sf(float v) { return (int)(v * g_sceneScale + 0.5f); }
 
 const SceneState* g_state = nullptr;
+const stage::Memory* g_mem = nullptr;   // custom-layout dynamics (peaks, helix)
 static inline const Theme& Th() { return kThemes[g_state->theme]; }
+
+// Remapped 0..1 level of band k for the CUSTOM layouts (never ORIGINAL).
+static inline float Lv(int k) { return stage::bandLevel(g_state->spectrum.barsLevel[k]); }
+static inline float Pk(int k) { return g_mem ? g_mem->peak[k] : 0.f; }
+
+// Playback progress 0..1. TR tracks loop forever, so their progress is the
+// position inside one minute; local files use the real decoded duration.
+static double PlayProgress() {
+    if (g_state->current < 0) return 0.0;
+    const double dur = g_state->current == kTrackCount
+        ? g_state->duration : 60.0;
+    if (dur <= 0.0) return 0.0;
+    double f = g_state->seconds / dur;
+    if (f > 1.0) f = std::fmod(f, 1.0);
+    return std::clamp(f, 0.0, 1.0);
+}
+
+// Transport word for the custom layouts' status corners.
+static const char* TransportWord() {
+    if (g_state->loading) return "LOAD";
+    if (g_state->current < 0) return "STOP";
+    if (g_state->libPaused) return "PAUSE";
+    return "PLAY";
+}
 
 // ---- LIB track-name pool ------------------------------------------------
 // The shell (browser or desktop) pushes the filtered local-track names here
@@ -509,14 +535,21 @@ void PaintFieldLayout() {
     const int pitch = 14, barW = 12;
     const int x0 = (kLogicalW - cols * pitch) / 2;
     for (int k = 0; k < cols; ++k) {
-        const float lv = std::clamp(g_state->spectrum.barsLevel[k] / 96.0f, 0.f, 1.f);
+        const float lv = Lv(k);
         const int x1 = x0 + k * pitch, x2 = x1 + barW;
         const int up = int(lv * 258);
-        if (up > 1) {
-            FillRectCol(S(x1), S(baseY - up), S(x2), S(baseY), t.bar);
-            FillRectCol(S(x1), S(baseY - up), S(x2), S(baseY - up + 3),
-                        LerpCol(t.bar, RGB(255, 255, 255), 0.45f));
+        // segmented body (2px segment + 1px gap), like the original window
+        for (int y = baseY - up; y < baseY; y += 3) {
+            const int y2 = std::min(y + 2, baseY);
+            const float heat = float(baseY - y) / 258.f;
+            FillRectCol(S(x1), S(y), S(x2), S(y2),
+                        LerpCol(t.bar, t.stripHot, heat * 0.55f));
         }
+        // peak-hold cap: bright, falls slower than the body
+        const int capY = baseY - int(Pk(k) * 258);
+        if (Pk(k) > 0.02f)
+            FillRectCol(S(x1), S(capY - 2), S(x2), S(capY),
+                        LerpCol(t.bar, RGB(255, 255, 255), 0.65f));
         const int down = int(lv * 46);
         if (down > 1) {
             FillRectCol(S(x1), S(baseY + 2), S(x2), S(baseY + 2 + down),
@@ -551,6 +584,17 @@ void PaintFieldLayout() {
         const char* themeName = t.name;
         const int w = (int)strlen(themeName) * 8;
         DrawCells(themeName, 616 - w, 24, 2);
+    }
+    DrawCells(TransportWord(), 24, 40, g_state->current >= 0 && !g_state->libPaused ? 0 : 2);
+
+    // wide progress rail above the status lines
+    {
+        FillRectCol(S(24), S(438), S(616), S(440), t.seam);
+        const int end = 24 + int(592 * PlayProgress());
+        if (end > 24) FillRectCol(S(24), S(438), S(end), S(440), t.bar);
+        if (g_state->current >= 0)
+            FillRectCol(S(end - 1), S(436), S(end + 2), S(442),
+                        LerpCol(t.bar, RGB(255, 255, 255), 0.5f));
     }
 
     std::string now;
@@ -595,14 +639,27 @@ void PaintStackLayout() {
     DrawCells("SOUND MEMOIRS", 16, 8, 0);
     { const char* nm = t.name; DrawCells(nm, 616 - (int)strlen(nm) * 8, 8, 2); }
 
-    // left: two channel meters, bottom-up
+    // left: two channel meters, bottom-up, with a slow-falling peak marker
     for (int side = 0; side < 2; ++side) {
         const int x1 = side ? 44 : 18, x2 = side ? 56 : 30;
-        const int n = std::clamp(int((side ? g_state->spectrum.envR : g_state->spectrum.envL) * 60.0f), 0, 60);
+        const float drive = std::clamp((side ? g_state->spectrum.envR : g_state->spectrum.envL) * 2.2f, 0.f, 1.f);
+        const int n = std::clamp(int(drive * 60.0f), 0, 60);
         for (int i = 0; i < n; ++i) {
             const int y2 = 440 - i * 6;
             FillRectCol(S(x1), S(y2 - 5), S(x2), S(y2),
                         i > 44 ? t.stripHot : t.strip);
+        }
+        // dormant scale: faint dots every 6 cells so silence still reads gauge
+        for (int i = n; i < 60; i += 6) {
+            const int y2 = 440 - i * 6;
+            FillRectCol(S(x1 + 4), S(y2 - 1), S(x2 - 4), S(y2),
+                        LerpCol(t.seam, t.outer, 0.35f));
+        }
+        const float pk = g_mem ? g_mem->meterPeak[side] : 0.f;
+        if (pk > 0.02f) {
+            const int py = 440 - int(pk * 360);
+            FillRectCol(S(x1 - 2), S(py - 2), S(x2 + 2), S(py),
+                        LerpCol(t.stripHot, RGB(255, 255, 255), 0.4f));
         }
         DrawCells(side ? "R" : "L", x1 + 1, 446, 2);
     }
@@ -620,13 +677,20 @@ void PaintStackLayout() {
     const int pitch = 6, barW = 5;
     const int x0 = cl + 1 + ((cr - cl - 2) - cols * pitch) / 2;
     for (int k = 0; k < cols; ++k) {
-        const float lv = std::clamp(g_state->spectrum.barsLevel[k] / 96.0f, 0.f, 1.f);
+        const float lv = Lv(k);
         const int x1 = x0 + k * pitch, x2 = x1 + barW;
         const int up = int(lv * 238);
-        if (up > 1) {
-            FillRectCol(S(x1), S(baseY - up), S(x2), S(baseY), t.bar);
-            FillRectCol(S(x1), S(baseY - up), S(x2), S(baseY - up + 2),
-                        LerpCol(t.bar, RGB(255, 255, 255), 0.45f));
+        for (int y = baseY - up; y < baseY; y += 3) {
+            const int y2 = std::min(y + 2, baseY);
+            const float heat = float(baseY - y) / 238.f;
+            FillRectCol(S(x1), S(y), S(x2), S(y2),
+                        LerpCol(t.bar, t.stripHot, heat * 0.55f));
+        }
+        const float pk = Pk(k);
+        if (pk > 0.02f) {
+            const int capY = baseY - int(pk * 238);
+            FillRectCol(S(x1), S(capY - 2), S(x2), S(capY),
+                        LerpCol(t.bar, RGB(255, 255, 255), 0.65f));
         }
         const int down = int(lv * 22);
         if (down > 1)
@@ -647,188 +711,288 @@ void PaintStackLayout() {
         gfx_polyline(pts, 120, side ? LerpCol(t.wave, t.bar, 0.45f) : t.wave, 1);
     }
     DrawCells("FIELD / 43 BAND", cl + 4, ct + 4, 2);
+    {
+        const char* tw = TransportWord();
+        DrawCells(tw, cr - 8 - (int)strlen(tw) * 8, ct + 4,
+                  g_state->current >= 0 && !g_state->libPaused ? 0 : 2);
+    }
+    // local file name under the display while a local track is active
+    if (g_state->current == kTrackCount && g_state->libCurrentRow >= 0 &&
+        g_state->libCurrentRow < g_libNameCount && g_libNames[g_state->libCurrentRow][0]) {
+        textLib(g_libNames[g_state->libCurrentRow], cl + 2, 441, cr - 2, 452, t.digit);
+    }
 
-    // right: full track list, two columns of 23
+    // right: full track list, two columns of 23. Three states: playing
+    // (blinking dot + bright text), selected (band + side marker), idle.
     const int listX = 408, listY = 40, colW = 108, rowH = 17;
+    const bool blink = (g_state->tick % 30) < 20;
     for (int i = 0; i < kTrackCount; ++i) {
         const int col = i / 23, row = i % 23;
         const int x = listX + col * colW, y = listY + row * rowH;
         const bool sel = g_state->selected == i;
+        const bool playing = g_state->current == i;
         if (sel) {
             FillRectCol(S(x), S(y), S(x + colW - 6), S(y + rowH - 2),
                         LerpCol(t.selBand, t.panel, 0.30f));
             FillRectCol(S(x), S(y), S(x + 3), S(y + rowH - 2), t.bar);
         }
+        if (playing && blink)
+            FillRectCol(S(x + colW - 12), S(y + 5), S(x + colW - 8), S(y + 9), t.stripHot);
         char b[8];
         snprintf(b, sizeof(b), "TR:%02d", i);
-        DrawCells(b, x + 8, y + 3, sel ? 0 : 2);
+        DrawCells(b, x + 8, y + 3, playing ? 0 : sel ? 0 : 2);
     }
 
-    // bottom rail: seek + time + hint
-    FillRectCol(S(cl), S(452), S(cr), S(454), t.seam);
-    const double dur = g_state->current == kTrackCount ? g_state->duration : 0.0;
-    const double pos = dur > 0 ? g_state->seconds : 0.0;
-    const int end = cl + int((cr - cl) * std::clamp(pos / (dur > 0 ? dur : 1.0), 0.0, 1.0));
-    if (end > cl) FillRectCol(S(cl), S(452), S(end), S(454), t.bar);
+    // bottom rail: seek + time + hint (4px rail, bright playhead, pause blink)
+    FillRectCol(S(cl), S(451), S(cr), S(455), t.seam);
+    const int end = cl + int((cr - cl) * PlayProgress());
+    if (end > cl) FillRectCol(S(cl), S(451), S(end), S(455), t.bar);
+    if (g_state->current >= 0 && (!g_state->libPaused || blink))
+        FillRectCol(S(end - 1), S(449), S(end + 2), S(457),
+                    LerpCol(t.bar, RGB(255, 255, 255), 0.5f));
     {
         char tb[32];
-        snprintf(tb, sizeof(tb), "TIME : %02dSEC", std::max(0, int(pos)));
+        snprintf(tb, sizeof(tb), "TIME : %02dSEC", std::max(0, int(g_state->seconds)));
         DrawCells(tb, 632 - (int)strlen(tb) * 8, 460, 3);
     }
     DrawCells("F7 VISUAL / F8 WING / F9 LAYOUT", cl, 460, 2);
 }
 
 // ---- composition: circular instrument dial -------------------------------
+// A real radial spectrum: 43 solid wedges grow out of a base ring, a progress
+// arc sweeps the inner dial, and the centre carries a large XY phase figure
+// with a one-frame afterglow. The former dot-string version covered ~3% of
+// the screen; the wedges alone carry an order of magnitude more ink.
 void PaintRingLayout() {
     const Theme& t = Th();
     const float kPi = 3.14159265f;
-    const int cx = 320, cy = 236;
+    const int cx = 320, cy = 232;
     FillRectCol(0, 0, S(kLogicalW), S(kLogicalH), LerpCol(t.outer, t.panel, 0.42f));
 
-    // concentric guide rings
-    auto ring = [&](int radius, COLORREF c, int thick) {
-        const int segs = 120;
-        for (int i = 0; i < segs; ++i) {
-            const float a = 2.f * kPi * i / segs;
-            const int x = cx + int(radius * cosf(a));
-            const int y = cy + int(radius * sinf(a));
-            FillRectCol(S(x), S(y), S(x + thick), S(y + thick), c);
-        }
+    auto dot = [&](float a, int r, int half, COLORREF c) {
+        const int x = cx + int(r * cosf(a)), y = cy + int(r * sinf(a));
+        FillRectCol(S(x - half), S(y - half), S(x + half + 1), S(y + half + 1), c);
     };
-    ring(96, LerpCol(t.frame, t.outer, 0.35f), 1);
-    ring(126, LerpCol(t.frame, t.outer, 0.20f), 1);
-    ring(196, LerpCol(t.seam, t.outer, 0.30f), 1);
+    auto ringDots = [&](int radius, COLORREF c, int segs, int half) {
+        for (int i = 0; i < segs; ++i)
+            dot(2.f * kPi * i / segs, radius, half, c);
+    };
 
-    // 43 radial band blocks, starting at 12 o'clock
+    // dial furniture: base ring under the wedges, outer boundary, tick marks
+    ringDots(104, LerpCol(t.frame, t.outer, 0.10f), 200, 0);
+    ringDots(196, LerpCol(t.seam, t.ink, 0.45f), 240, 0);
+    for (int i = 0; i < 12; ++i) {
+        const float a = 2.f * kPi * i / 12;
+        for (int r = 188; r <= 196; r += 2)
+            dot(a, r, 0, LerpCol(t.frame, t.outer, 0.15f));
+    }
+
+    // progress arc: sweeps the inner dial as the track plays
+    {
+        const float prog = float(PlayProgress());
+        const int lit = int(prog * 144);
+        for (int i = 0; i < 144; ++i) {
+            const float a = -kPi / 2.f + 2.f * kPi * i / 144;
+            const bool on = g_state->current >= 0 && i < lit;
+            dot(a, 96, on ? 1 : 0,
+                on ? t.bar : LerpCol(t.seam, t.outer, 0.30f));
+        }
+        if (g_state->current >= 0 && lit > 0) {
+            const float a = -kPi / 2.f + 2.f * kPi * (lit - 1) / 144;
+            dot(a, 96, 2, LerpCol(t.bar, RGB(255, 255, 255), 0.55f));
+        }
+    }
+
+    // 43 solid radial wedges, starting at 12 o'clock. Each wedge is a run of
+    // 5x5 cells at 2px radial pitch (neighbours overlap into a continuous
+    // annulus), heat-graded toward the tip, with a bright peak-hold cell that
+    // falls slower than the body.
     const int bands = memoirs::kSpectrumBands;
     for (int k = 0; k < bands; ++k) {
-        const float lv = std::clamp(g_state->spectrum.barsLevel[k] / 96.0f, 0.f, 1.f);
-        const int blocks = 2 + int(lv * 10.f);
+        const float lv = Lv(k);
         const float a = -kPi / 2.f + 2.f * kPi * k / bands;
-        for (int b = 0; b < blocks; ++b) {
-            const int r = 132 + b * 6;
-            const int x = cx + int(r * cosf(a)) - 1;
-            const int y = cy + int(r * sinf(a)) - 1;
-            const COLORREF c = (b == blocks - 1) ? t.bar
-                              : LerpCol(t.wave, t.bar, 0.28f);
-            FillRectCol(S(x), S(y), S(x + 3), S(y + 3), c);
+        const int len = int(lv * 82.f);
+        for (int r = 108; r < 108 + len; r += 2) {
+            const float heat = float(r - 108) / 82.f;
+            dot(a, r, 2, LerpCol(t.wave, t.bar, 0.25f + heat * 0.75f));
         }
+        const float pk = Pk(k);
+        if (pk > 0.02f)
+            dot(a, 108 + int(pk * 82.f), 2,
+                LerpCol(t.bar, RGB(255, 255, 255), 0.65f));
     }
 
-    // centre: phase diamond with up to three decayed traces
+    // centre: large XY phase figure with a dim afterglow of the previous trace
     {
-        GfxPoint frame[] = { {(std::int16_t)S(cx), (std::int16_t)S(cy - 38)},
-                             {(std::int16_t)S(cx + 46), (std::int16_t)S(cy)},
-                             {(std::int16_t)S(cx), (std::int16_t)S(cy + 38)},
-                             {(std::int16_t)S(cx - 46), (std::int16_t)S(cy)},
-                             {(std::int16_t)S(cx), (std::int16_t)S(cy - 38)} };
-        gfx_polyline(frame, 5, t.frame, 1);
-        // XY plot of the two channels: the classic vector-display figure
-        {
-            GfxPoint pts2[120];
+        GfxPoint frame[] = { {(std::int16_t)S(cx), (std::int16_t)S(cy - 72)},
+                             {(std::int16_t)S(cx + 80), (std::int16_t)S(cy)},
+                             {(std::int16_t)S(cx), (std::int16_t)S(cy + 72)},
+                             {(std::int16_t)S(cx - 80), (std::int16_t)S(cy)},
+                             {(std::int16_t)S(cx), (std::int16_t)S(cy - 72)} };
+        gfx_polyline(frame, 5, LerpCol(t.frame, t.outer, 0.20f), 1);
+        if (g_mem && g_mem->samples > 0) {
+            const int prev = (g_mem->trace + 5) % 6;
+            GfxPoint ghost[120];
             for (int i = 0; i < 120; ++i) {
-                const float l = std::clamp(g_state->spectrum.waveL[i * 2] / 64.f, -1.f, 1.f);
-                const float r = std::clamp(g_state->spectrum.waveR[i * 2] / 64.f, -1.f, 1.f);
-                pts2[i] = { (std::int16_t)S(cx + int(l * 34)), (std::int16_t)S(cy - int(r * 34)) };
+                const GfxPoint& p = g_mem->traces[prev][i];
+                ghost[i] = { (std::int16_t)S(cx + p.x), (std::int16_t)S(cy - p.y) };
             }
-            gfx_polyline(pts2, 120, t.bar, 1);
+            gfx_polyline(ghost, 120, LerpCol(t.bar, t.panel, 0.55f), 1);
         }
-        FillRectCol(S(cx - 1), S(cy - 1), S(cx + 2), S(cy + 2), t.bar);
+        GfxPoint pts2[120];
+        for (int i = 0; i < 120; ++i) {
+            const float l = std::clamp(g_state->spectrum.waveL[i * 2] / 64.f, -1.f, 1.f);
+            const float r = std::clamp(g_state->spectrum.waveR[i * 2] / 64.f, -1.f, 1.f);
+            pts2[i] = { (std::int16_t)S(cx + int(l * 62)), (std::int16_t)S(cy - int(r * 62)) };
+        }
+        gfx_polyline(pts2, 120, t.bar, 1);
+        FillRectCol(S(cx - 1), S(cy - 1), S(cx + 2), S(cy + 2), t.frame);
     }
 
-    // 46 track ticks on the outside
+    // 46 track ticks on the outside: playing pulses, selected enlarges
+    const bool blink = (g_state->tick % 30) < 20;
     for (int i = 0; i < kTrackCount; ++i) {
         const float a = -kPi / 2.f + 2.f * kPi * i / kTrackCount;
-        const int x = cx + int(206 * cosf(a));
-        const int y = cy + int(206 * sinf(a));
         const bool sel = g_state->selected == i;
-        const int halfW = sel ? 3 : 2, halfH = sel ? 6 : 3;
-        FillRectCol(S(x - halfW), S(y - halfH), S(x + halfW), S(y + halfH),
-                    sel ? t.bar : LerpCol(t.seam, t.ink, 0.55f));
+        const bool playing = g_state->current == i;
+        const int half = playing ? 3 : sel ? 2 : 1;
+        COLORREF c = LerpCol(t.seam, t.ink, 0.45f);
+        if (sel) c = t.selEdge;
+        if (playing) c = blink ? t.stripHot : t.bar;
+        dot(a, 206, half, c);
     }
 
-    DrawCells("SOUND MEMOIRS", 152, 14, 0);
-    { const char* nm = t.name; DrawCells(nm, 632 - (int)strlen(nm) * 8, 14, 2); }
-
+    DrawCells("SOUND MEMOIRS", 24, 14, 0);
+    { const char* nm = t.name; DrawCells(nm, 616 - (int)strlen(nm) * 8, 14, 2); }
+    DrawCells(TransportWord(), 24, 30, g_state->current >= 0 && !g_state->libPaused ? 0 : 2);
+    {
+        char b[24];
+        snprintf(b, sizeof(b), "TIME:%03d", std::max(0, int(g_state->seconds)));
+        DrawCells(b, 616 - (int)strlen(b) * 8, 30, 3);
+    }
     {
         char b[16];
         snprintf(b, sizeof(b), "TR:%02d", std::max(0, g_state->selected));
-        DrawCells(b, cx - (int)strlen(b) * 4, 446, g_state->selected < kTrackCount ? 0 : 2);
+        DrawCells(b, cx - (int)strlen(b) * 4, 452, g_state->selected < kTrackCount ? 0 : 2);
     }
-    DrawCells("F7 VISUAL / F9 LAYOUT", 196, 462, 2);
+    DrawCells("F7 VISUAL / F9 LAYOUT", 24, 466, 2);
 }
 
-// ---- composition: crosshair / vector display -----------------------------
+// ---- composition: four-quadrant instrument split --------------------------
+// The cross divides the screen into four working quadrants instead of leaving
+// them empty around a small centre figure: L scope / R scope on top, a
+// horizontal band ladder and the transport readout below. The XY diamond
+// belongs to RING now; the crosshair keeps only a small hub badge.
 void PaintCrossLayout() {
     const Theme& t = Th();
     FillRectCol(0, 0, S(kLogicalW), S(kLogicalH), LerpCol(t.outer, t.panel, 0.48f));
 
     const int cx = 320, cy = 240;
-    const COLORREF axis = LerpCol(t.frame, t.outer, 0.66f);
-    FillRectCol(S(cx - 1), S(24), S(cx + 1), S(456), axis);
-    FillRectCol(S(24), S(cy - 1), S(616), S(cy + 1), axis);
-
-    for (int y = 40; y < 456; y += 40) {
-        FillRectCol(S(cx - 6), S(y), S(cx - 1), S(y + 1), t.seam);
-        FillRectCol(S(cx + 1), S(y), S(cx + 6), S(y + 1), t.seam);
+    const COLORREF axis = LerpCol(t.frame, t.outer, 0.25f);
+    FillRectCol(S(cx - 1), S(40), S(cx + 2), S(456), axis);
+    FillRectCol(S(24), S(cy - 1), S(616), S(cy + 2), axis);
+    for (int y = 56; y < 456; y += 32) {
+        FillRectCol(S(cx - 5), S(y), S(cx - 1), S(y + 1), t.seam);
+        FillRectCol(S(cx + 1), S(y), S(cx + 5), S(y + 1), t.seam);
     }
-    for (int x = 40; x < 616; x += 40) {
-        FillRectCol(S(x), S(cy - 6), S(x + 1), S(cy - 1), t.seam);
-        FillRectCol(S(x), S(cy + 1), S(x + 1), S(cy + 6), t.seam);
+    for (int x = 40; x < 616; x += 32) {
+        FillRectCol(S(x), S(cy - 5), S(x + 1), S(cy - 1), t.seam);
+        FillRectCol(S(x), S(cy + 1), S(x + 1), S(cy + 5), t.seam);
     }
 
-    // channel traces ride above (left) and below (right) the horizontal axis
-    GfxPoint pts[120];
+    // top quadrants: full-width channel scopes, one per side
     for (int side = 0; side < 2; ++side) {
         const float* wv = side ? g_state->spectrum.waveR : g_state->spectrum.waveL;
-        const int sway = side ? 26 : -26;
-        const int x0 = side ? 392 : 24;
+        const int x0 = side ? 336 : 28, span = 268;
+        const int midY = 148;
+        FillRectCol(S(x0), S(midY), S(x0 + span), S(midY + 1),
+                    LerpCol(t.seam, t.outer, 0.30f));
+        GfxPoint pts[120];
         for (int i = 0; i < 120; ++i) {
             const float v = std::clamp(wv[i * 2] / 64.0f, -1.f, 1.f);
-            pts[i].x = (std::int16_t)S(x0 + i * 224 / 119);
-            pts[i].y = (std::int16_t)S(cy + sway + int(v * 16));
+            pts[i].x = (std::int16_t)S(x0 + i * span / 119);
+            pts[i].y = (std::int16_t)S(midY + int(v * 72));
         }
-        gfx_polyline(pts, 120, side ? LerpCol(t.wave, t.bar, 0.45f) : t.wave, 1);
+        gfx_polyline(pts, 120, side ? LerpCol(t.wave, t.bar, 0.40f) : t.wave, 3);
+        DrawCells(side ? "CH : R" : "CH : L", x0 + 2, 60, 2);
+        // quadrant corner bracket
+        const int bx = side ? 604 : 28, dir = side ? -1 : 1;
+        FillRectCol(S(bx), S(52), S(bx + dir * 12), S(53), t.frame);
+        FillRectCol(S(bx), S(52), S(bx + dir), S(64), t.frame);
     }
 
-    // centre window: phase diamond over up to three decayed traces
+    // bottom-left: 43-band horizontal ladder, low frequencies at the top
     {
-        GfxPoint frame[] = { {(std::int16_t)S(cx), (std::int16_t)S(cy - 40)},
-                             {(std::int16_t)S(cx + 48), (std::int16_t)S(cy)},
-                             {(std::int16_t)S(cx), (std::int16_t)S(cy + 40)},
-                             {(std::int16_t)S(cx - 48), (std::int16_t)S(cy)},
-                             {(std::int16_t)S(cx), (std::int16_t)S(cy - 40)} };
-        gfx_polyline(frame, 5, t.frame, 1);
-        // XY plot of the two channels inside the diamond
+        const int lx = 36, ly = 260, rowH = 4, maxW = 252;
+        for (int k = 0; k < memoirs::kSpectrumBands; ++k) {
+            const int y = ly + k * rowH;
+            const int w = int(Lv(k) * maxW);
+            if (w > 0)
+                FillRectCol(S(lx), S(y), S(lx + w), S(y + 3),
+                            LerpCol(t.wave, t.bar, float(k) / 43.f));
+            const int pw = int(Pk(k) * maxW);
+            if (Pk(k) > 0.02f)
+                FillRectCol(S(lx + pw), S(y), S(lx + pw + 3), S(y + 3),
+                            LerpCol(t.bar, RGB(255, 255, 255), 0.6f));
+        }
+        DrawCells("43 BAND", lx, 444, 2);
+    }
+
+    // bottom-right: transport readout panel
+    {
+        const int px = 348;
+        DrawCells(TransportWord(), px, 268, g_state->current >= 0 && !g_state->libPaused ? 0 : 2);
         {
-            GfxPoint pts2[120];
-            for (int i = 0; i < 120; ++i) {
-                const float l = std::clamp(g_state->spectrum.waveL[i * 2] / 64.f, -1.f, 1.f);
-                const float r = std::clamp(g_state->spectrum.waveR[i * 2] / 64.f, -1.f, 1.f);
-                pts2[i] = { (std::int16_t)S(cx + int(l * 40)), (std::int16_t)S(cy - int(r * 40)) };
-            }
-            gfx_polyline(pts2, 120, t.bar, 1);
+            char b[24];
+            snprintf(b, sizeof(b), "TR:%02d", std::max(0, g_state->current));
+            DrawCells(b, px, 288, g_state->current >= 0 ? 0 : 2);
         }
+        {
+            char b[32];
+            const int secs = std::max(0, int(g_state->seconds));
+            snprintf(b, sizeof(b), "%02d:%02d", secs / 60, secs % 60);
+            DrawCells(b, px, 308, 3);
+        }
+        if (g_state->current == kTrackCount && g_state->libCurrentRow >= 0 &&
+            g_state->libCurrentRow < g_libNameCount && g_libNames[g_state->libCurrentRow][0]) {
+            textLib(g_libNames[g_state->libCurrentRow], px, 326, 612, 342, t.digit);
+        }
+        // progress rail with playhead
+        FillRectCol(S(px), S(352), S(608), S(356), t.seam);
+        const int end = px + int(260 * PlayProgress());
+        if (end > px) FillRectCol(S(px), S(352), S(end), S(356), t.bar);
+        if (g_state->current >= 0)
+            FillRectCol(S(end - 1), S(350), S(end + 2), S(358),
+                        LerpCol(t.bar, RGB(255, 255, 255), 0.5f));
+        static const char* orders[4] = { "ORDER", "ONE", "LOOP", "SHUFFLE" };
+        DrawCells(orders[g_state->localOrder % 4], px, 372, 2);
+        DrawCells("EXIT", px, 400, g_state->selected == kExitIndex ? 1 : 2);
+        // quadrant corner bracket
+        FillRectCol(S(592), S(440), S(604), S(441), t.frame);
+        FillRectCol(S(603), S(428), S(604), S(441), t.frame);
     }
 
-    // progress runs down the lower axis
+    // hub: small diamond badge where the axes cross
     {
-        const double dur = g_state->current == kTrackCount ? g_state->duration : 0.0;
-        const double pos = dur > 0 ? g_state->seconds : 0.0;
-        const int len = int(192.0 * std::clamp(pos / (dur > 0 ? dur : 1.0), 0.0, 1.0));
-        FillRectCol(S(cx - 3), S(264), S(cx + 3), S(264 + len), t.bar);
+        GfxPoint hub[] = { {(std::int16_t)S(cx), (std::int16_t)S(cy - 10)},
+                           {(std::int16_t)S(cx + 12), (std::int16_t)S(cy)},
+                           {(std::int16_t)S(cx), (std::int16_t)S(cy + 10)},
+                           {(std::int16_t)S(cx - 12), (std::int16_t)S(cy)},
+                           {(std::int16_t)S(cx), (std::int16_t)S(cy - 10)} };
+        gfx_polyline(hub, 5, t.frame, 1);
+        const bool blink = (g_state->tick % 30) < 20;
+        if (g_state->current >= 0 && (!g_state->libPaused || blink))
+            FillRectCol(S(cx - 2), S(cy - 2), S(cx + 3), S(cy + 3), t.bar);
     }
 
     DrawCells("SOUND MEMOIRS", 24, 20, 0);
     { const char* nm = t.name; DrawCells(nm, 616 - (int)strlen(nm) * 8, 20, 2); }
-    DrawCells("EXIT", 24, 300, g_state->selected == kExitIndex ? 1 : 2);
-
+    DrawCells("TAB GRID / F9 LAYOUT", 24, 466, 2);
     {
         char b[24];
-        snprintf(b, sizeof(b), "TR:%02d", std::max(0, g_state->selected));
-        DrawCells(b, cx - (int)strlen(b) * 4, 466, 0);
+        snprintf(b, sizeof(b), "SEL:TR:%02d", std::max(0, g_state->selected));
+        DrawCells(b, 616 - (int)strlen(b) * 8, 466, 2);
     }
-    DrawCells("TAB GRID / F9 LAYOUT", 24, 466, 2);
 
     if (g_state->showGridOverlay) {
         AlphaFill(0, 0, S(kLogicalW), S(kLogicalH), RGB(10, 12, 16), 0x8C);
@@ -838,6 +1002,179 @@ void PaintCrossLayout() {
         PaintGrid(g);
         PaintSelectionStripe(g);
         DrawCells("TAB CLOSE", 24, 466, 2);
+    }
+}
+
+// ---- composition: mechanical DNA drive shaft (HELIX) ----------------------
+// From docs/visual-motion-roadmap.md: a horizontal two-strand pixel chain in
+// a central observation window, joined by short cross pins. Depth is read
+// from occlusion and pin width, not gradients: the front strand is complete,
+// the back strand breaks a few pixels at each crossing. A low-frequency
+// attack launches a torsion pulse at the left bearing that crosses the shaft
+// in ~160 ms; passed links spring back. Side racks (RACK) load with each
+// channel's fast envelope and leave a brief peak mark.
+void PaintHelixLayout() {
+    const Theme& t = Th();
+    const float kPi = 3.14159265f;
+    FillRectCol(0, 0, S(kLogicalW), S(kLogicalH), LerpCol(t.outer, t.panel, 0.40f));
+
+    const bool active = g_state->current >= 0;
+    const float impact = g_mem ? g_mem->impact : 0.f;
+    const float pulse = g_mem ? g_mem->helixPulse : 0.f;
+    const float head = g_mem ? g_mem->helixHead : -1.f;
+
+    // observation window
+    const int wl = 92, wt = 108, wr = 548, wb = 348;
+    FillRectCol(S(wl), S(wt), S(wr), S(wb), LerpCol(t.panel, t.outer, 0.30f));
+    FillRectCol(S(wl), S(wt), S(wr), S(wt + 1), t.frame);
+    FillRectCol(S(wl), S(wb - 1), S(wr), S(wb), t.frame);
+    FillRectCol(S(wl), S(wt), S(wl + 1), S(wb), t.frame);
+    FillRectCol(S(wr - 1), S(wt), S(wr), S(wb), t.frame);
+    // corner rivets on the window frame
+    for (int x : { wl + 4, wr - 6 })
+        for (int y : { wt + 4, wb - 6 })
+            FillRectCol(S(x), S(y), S(x + 2), S(y + 2), t.seam);
+
+    const int cy = 228, xl = wl + 22, xr = wr - 22;
+    const int span = xr - xl;
+    // bearings at both ends: fixed housings the shaft runs through
+    for (int bx : { xl - 10, xr + 4 }) {
+        FillRectCol(S(bx), S(cy - 26), S(bx + 6), S(cy + 26), t.frame);
+        FillRectCol(S(bx + 1), S(cy - 20), S(bx + 5), S(cy + 20),
+                    LerpCol(t.frame, t.panel, 0.55f));
+    }
+    // centre line of the shaft
+    FillRectCol(S(xl), S(cy), S(xr), S(cy + 1), LerpCol(t.seam, t.outer, 0.25f));
+
+    // torsion: local phase bump travelling with the pulse head
+    auto twist = [&](float u) -> float {
+        if (head < 0.f || pulse <= 0.01f) return 0.f;
+        const float d = u - head;
+        return pulse * 1.9f * std::exp(-d * d * 26.f);
+    };
+    // amplitude: narrow and slack in silence, tension from sustained bass,
+    // local flare where the torsion head passes
+    const float sustain = g_mem ? g_mem->lowSustain : 0.f;
+    auto amp = [&](float u) -> float {
+        const float base = active ? 26.f + 14.f * sustain : 9.f;
+        const float d = head >= 0.f ? u - head : 9.f;
+        return base + 16.f * pulse * std::exp(-d * d * 20.f);
+    };
+    const float spin = active ? float(g_state->seconds) * 2.4f : 0.6f;
+    const float turns = 2.6f;   // ~2.6 full twists across the window
+
+    // 12 cross pins: width follows the section, side-on reads as a dot
+    const int kPins = 12;
+    for (int p = 0; p < kPins; ++p) {
+        const float u = (p + 0.5f) / kPins;
+        const float th = spin + u * turns * 2.f * kPi + twist(u);
+        const float s = std::sin(th);
+        const int x = xl + int(u * span);
+        const int half = int(amp(u) * std::abs(s));
+        const int w = std::abs(s) > 0.55f ? 3 : std::abs(s) > 0.25f ? 2 : 1;
+        // stressed pins near the wave head borrow the spectrum accent
+        const float d = head >= 0.f ? u - head : 9.f;
+        const bool stressed = pulse > 0.1f && std::abs(d) < 0.10f;
+        const COLORREF pc = stressed ? t.bar
+                          : LerpCol(t.wave, t.panel, 0.35f + 0.3f * (1.f - std::abs(s)));
+        if (half > 0)
+            FillRectCol(S(x - w / 2), S(cy - half), S(x + w / 2 + 1), S(cy + half), pc);
+        else
+            FillRectCol(S(x), S(cy - 1), S(x + 1), S(cy + 1), pc);
+        // rivet on the front strand end; high-frequency transient lights the
+        // one or two rivets nearest the head
+        const float hf = std::clamp(Lv(36) + Lv(40), 0.f, 1.f);
+        const bool lit = stressed || (hf > 0.55f && head >= 0.f && std::abs(d) < 0.16f);
+        const int ry = cy + int(amp(u) * s * (std::cos(th) > 0 ? 1.f : -1.f));
+        FillRectCol(S(x - 1), S(ry - 1), S(x + 2), S(ry + 2),
+                    lit ? LerpCol(t.bar, RGB(255, 255, 255), 0.5f) : t.seam);
+    }
+
+    // the two strands, drawn per column. Back strand first with a gap at
+    // crossings, front strand complete on top: occlusion reads the helix.
+    const COLORREF backCol = LerpCol(t.wave, t.panel, 0.52f);
+    for (int x = xl; x <= xr; ++x) {
+        const float u = float(x - xl) / span;
+        const float th = spin + u * turns * 2.f * kPi + twist(u);
+        const float s = std::sin(th), c = std::cos(th);
+        const int ya = cy + int(amp(u) * s);
+        const int yb = cy - int(amp(u) * s);
+        const bool aFront = c > 0.f;
+        const int yBack = aFront ? yb : ya;
+        const int yFront = aFront ? ya : yb;
+        const bool crossing = std::abs(s) < 0.16f;
+        if (!crossing)
+            FillRectCol(S(x), S(yBack - 1), S(x + 1), S(yBack + 2), backCol);
+        const COLORREF fc = LerpCol(t.wave, t.bar, 0.18f + 0.30f * std::abs(c));
+        FillRectCol(S(x), S(yFront - 2), S(x + 1), S(yFront + 2), fc);
+    }
+
+    // ---- side racks (RACK): tooth rail + carriage per channel -------------
+    for (int side = 0; side < 2; ++side) {
+        const int rx = side ? 588 : 44;
+        const int top = 120, bot = 420;
+        // rail teeth
+        for (int y = top; y <= bot; y += 10) {
+            const int len = (y - top) % 50 == 0 ? 8 : 4;
+            const int x0 = side ? rx : rx - len;
+            FillRectCol(S(x0), S(y), S(x0 + len), S(y + 1),
+                        LerpCol(t.frame, t.outer, 0.35f));
+        }
+        FillRectCol(S(rx), S(top), S(rx + 1), S(bot), LerpCol(t.frame, t.outer, 0.25f));
+        // carriage: fast channel envelope drives the travel
+        const float drive = std::clamp(g_state->wing[side], 0.f, 1.f);
+        const int cy2 = bot - int(drive * (bot - top - 16));
+        const int cx0 = side ? rx + 2 : rx - 16;
+        FillRectCol(S(cx0), S(cy2), S(cx0 + 14), S(cy2 + 16),
+                    LerpCol(t.bar, t.panel, 0.25f));
+        FillRectCol(S(cx0), S(cy2), S(cx0 + 14), S(cy2 + 2), t.bar);
+        FillRectCol(S(cx0 + 5), S(cy2 + 6), S(cx0 + 9), S(cy2 + 10), t.panel);
+        // brief peak mark left on the rail
+        const float pk = g_mem ? g_mem->meterPeak[side] : 0.f;
+        if (pk > 0.03f) {
+            const int py = bot - int(pk * (bot - top - 16));
+            FillRectCol(S(side ? rx - 6 : rx + 1), S(py), S(side ? rx : rx + 7), S(py + 2),
+                        t.stripHot);
+        }
+        DrawCells(side ? "R" : "L", rx - 3, bot + 10, 2);
+    }
+
+    // header / status
+    DrawCells("SOUND MEMOIRS", 24, 20, 0);
+    { const char* nm = t.name; DrawCells(nm, 616 - (int)strlen(nm) * 8, 20, 2); }
+    DrawCells("HELIX : 05", 24, 36, 3);
+    DrawCells(TransportWord(), 616 - (int)strlen(TransportWord()) * 8, 36,
+              active && !g_state->libPaused ? 0 : 2);
+
+    // under the window: track + time + progress
+    {
+        char b[48];
+        if (g_state->current == kTrackCount) snprintf(b, sizeof(b), "NOW : LOCAL FILE");
+        else if (active) snprintf(b, sizeof(b), "NOW : TRACK %02d", g_state->current);
+        else snprintf(b, sizeof(b), "NOW : <SILENCE>");
+        DrawCells(b, 92, 366, 3);
+        char tb[32];
+        const int secs = std::max(0, int(g_state->seconds));
+        snprintf(tb, sizeof(tb), "%02d:%02d", secs / 60, secs % 60);
+        DrawCells(tb, 548 - (int)strlen(tb) * 8, 366, 3);
+    }
+    if (g_state->current == kTrackCount && g_state->libCurrentRow >= 0 &&
+        g_state->libCurrentRow < g_libNameCount && g_libNames[g_state->libCurrentRow][0]) {
+        textLib(g_libNames[g_state->libCurrentRow], 92, 380, 548, 396, t.digit);
+    }
+    FillRectCol(S(92), S(404), S(548), S(408), t.seam);
+    {
+        const int end = 92 + int(456 * PlayProgress());
+        if (end > 92) FillRectCol(S(92), S(404), S(end), S(408), t.bar);
+        if (active)
+            FillRectCol(S(end - 1), S(402), S(end + 2), S(410),
+                        LerpCol(t.bar, RGB(255, 255, 255), 0.5f));
+    }
+    DrawCells("F7 VISUAL / F9 LAYOUT", 92, 424, 2);
+    {
+        char b[24];
+        snprintf(b, sizeof(b), "SEL:TR:%02d", std::max(0, g_state->selected));
+        DrawCells(b, 548 - (int)strlen(b) * 8, 424, 2);
     }
 }
 
@@ -1062,6 +1399,7 @@ static void PaintArchivePage() {
 void sceneRender(const SceneState& s, float scale, const stage::Memory& memory,
                  SceneHost* host) {
     g_state = &s;
+    g_mem = &memory;
     g_sceneScale = scale;
     gfx_reset();
     gfx_clear(kColOuter);
@@ -1072,6 +1410,7 @@ void sceneRender(const SceneState& s, float scale, const stage::Memory& memory,
         if (layoutMode == layout::Stack) { PaintStackLayout(); return; }
         if (layoutMode == layout::Ring) { PaintRingLayout(); return; }
         if (layoutMode == layout::Cross) { PaintCrossLayout(); return; }
+        if (layoutMode == layout::Helix) { PaintHelixLayout(); return; }
     }
 
     const int mode = s.stageMode;
