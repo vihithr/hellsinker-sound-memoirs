@@ -1271,12 +1271,12 @@ void PaintHelixLayout() {
     for (int y = wt + 20; y < wb; y += 40)
         FillRectCol(S(wl - 6), S(y), S(wr + 6), S(y + 1), strata);
 
-    // rung positions: uniform upward scroll on the standby-aware sink clock
-    const double scroll = g_mem ? g_mem->sinkClock : 0.0;
-    const int base = int(std::floor(scroll));
-    const int frac = int((scroll - base) * pitch);
+    // rung positions: uniform UPWARD scroll, sub-row offset locked to the
+    // same histClock phase that pushes the ring (zero tear, zero rebound)
+    const double sub = g_mem && g_mem->histClock >= 0.0
+        ? std::clamp(g_mem->sinkClock - g_mem->histClock, 0.0, 0.999) : 0.0;
+    const int frac = int(sub * pitch);
     const int rows = (wb - wt) / pitch + 2;
-    (void)base;
 
     // history lookup: row 0 = newest sample at the bottom of the shaft
     auto hist = [&](int row, int side) -> float {
@@ -1306,7 +1306,7 @@ void PaintHelixLayout() {
     gfx_push_clip(S(wl - 14), S(wt + 1), S(wr + 14), S(wb - 1));
     // rungs + cross pins, oldest at the top; beat rungs carry a 2px hot bar
     for (int j = rows; j >= 0; --j) {
-        const int y = wb - j * pitch + frac;
+        const int y = wb - j * pitch - frac;
         if (y < wt - pitch || y > wb + pitch) continue;
         const int row = j;                      // history age (0 = newest)
         const int xl2 = strandX(row, 0), xr2 = strandX(row, 1);
@@ -1331,7 +1331,7 @@ void PaintHelixLayout() {
     // 2px strand segments between consecutive rung nodes, drawn after the
     // pins so the strands read on top: L in wave, R in bar
     for (int j = rows; j >= 1; --j) {
-        const int y0 = wb - j * pitch + frac, y1 = wb - (j - 1) * pitch + frac;
+        const int y0 = wb - j * pitch - frac, y1 = wb - (j - 1) * pitch - frac;
         if (y1 < wt - pitch || y0 > wb + pitch) continue;
         for (int side = 0; side < 2; ++side) {
             GfxPoint seg[2] = {
@@ -1697,10 +1697,13 @@ void PaintSonoLayout() {
     // waterfall body: newest row at the top, history scrolls strictly down
     if (g_mem) {
         const int H = stage::Memory::kSonoRows;
-        const double clock = g_mem->sonoClock;
-        const int frac = int((clock - std::floor(clock)) * 4.0);
+        // frac shares the ring-push phase: 3->0 happens on the exact frame
+        // sonoHead advances, so the scroll never rebounds
+        const int frac = int(std::clamp(g_mem->sonoClock - g_mem->sonoLast, 0.0, 0.999) * 4.0);
         const COLORREF c1 = LerpCol(t.panel, t.seam, 0.85f);
         gfx_push_clip(S(20), S(78), S(536), S(430));
+        // one extra row above the window slides in as frac grows, so the
+        // visible stream never pops at the top edge
         for (int r = 0; r < H; ++r) {
             const int y = 78 + r * 4 + frac;
             if (y >= 430) break;
@@ -1817,16 +1820,17 @@ void PaintTrackLayout() {
     InsetPanel(16, 132, 624, 446);
     const int topY = 136, rowH = 12, headSlot = 3;
     const int playY = topY + headSlot * rowH;
-    const double clock = g_mem ? g_mem->trackClock : 0.0;
-    const int frac = int((clock - std::floor(clock)) * rowH);
+    // frac shares the ring-push phase; every row uses ONE continuous formula
+    // (no pinned-row special case) so the whole sheet slides uniformly and
+    // the fixed playhead rules simply bracket whichever row passes through
+    const int frac = g_mem
+        ? int(std::clamp(g_mem->trackClock - g_mem->trackLast, 0.0, 0.999) * rowH) : 0;
     const int current = g_mem ? (g_mem->trackRowCounter - 1) & 0xFF : 0;
     const int H = stage::Memory::kTrackRows;
     const char* hexd = "0123456789ABCDEF";
     gfx_push_clip(S(18), S(134), S(622), S(444));
-    for (int slot = 0; slot < 25; ++slot) {
-        const int age = slot - headSlot;
-        // newest row pinned at the playhead; everything else slides down
-        const int y = age == 0 ? playY : playY + age * rowH + frac;
+    for (int age = -1; age <= 26; ++age) {
+        const int y = playY + age * rowH + frac;
         if (y + rowH < 134 || y > 444) continue;
         const int rowNum = (current - age) & 0xFF;
         const bool hasData = g_mem && age >= 0 && age < H;

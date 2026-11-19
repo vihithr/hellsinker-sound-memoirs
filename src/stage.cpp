@@ -30,12 +30,15 @@ float channelDrive(float env,const float* wave){
 }
 }
 void Memory::advance(const memoirs::Spectrum& s,int id,double seconds,bool playing,bool paused){
-    // standby-aware animation clocks survive resets (freeze, never jump)
-    struct Clocks { double sink,dive,sono,track,deck; };
-    const Clocks keep{sinkClock,diveClock,sonoClock,trackClock,deckClock};
+    // standby-aware animation clocks survive resets (freeze, never jump);
+    // histClock/sonoLast/trackLast keep their phase so resume never tears
+    struct Clocks { double sink,dive,sono,track,deck,hist,sonoL,trackL; };
+    const Clocks keep{sinkClock,diveClock,sonoClock,trackClock,deckClock,
+                      histClock,sonoLast,trackLast};
     auto restore=[&](const Clocks& c){
         sinkClock=c.sink; diveClock=c.dive; sonoClock=c.sono;
         trackClock=c.track; deckClock=c.deck;
+        histClock=c.hist; sonoLast=c.sonoL; trackLast=c.trackL;
     };
     if(id!=track || (playing && motion>=0 && (seconds+.10<motion || seconds-motion>1.0))){
         *this=Memory{}; track=id; restore(keep);
@@ -47,9 +50,25 @@ void Memory::advance(const memoirs::Spectrum& s,int id,double seconds,bool playi
     }
     if(paused)return;
     float dt=motion>=0?float(seconds-motion):1.f/60.f;
-    if(dt<=0)return;
+    if(motion>=0 && seconds==motion){
+        // Audio position quantised: the buffer clock has not ticked between
+        // two 60Hz render frames. Keep the visuals moving at 1/60 for up to
+        // 3 frames, then debit the debt from the next real dt (no drift).
+        if(sameSecFrames>=3)return;
+        ++sameSecFrames;
+        dt=1.f/60.f;
+        clockComp+=dt;
+    }else{
+        sameSecFrames=0;
+        if(dt<=0)return;
+        if(clockComp>0){
+            const float pay=float(std::min(clockComp,double(dt)));
+            dt-=pay; clockComp-=pay;
+            if(dt<=0){motion=seconds;return;}
+        }
+        motion=seconds;
+    }
     dt=std::clamp(dt,.001f,.12f);
-    motion=seconds;
     sinkClock+=dt*8.0;    // 8 rungs/s at 10px = uniform 80px/s descent
     diveClock+=dt*0.32;   // one tunnel layer born every 1/0.32 s
     sonoClock+=dt*15.0;   // SONO waterfall prints 15 rows/s
@@ -116,11 +135,11 @@ void Memory::advance(const memoirs::Spectrum& s,int id,double seconds,bool playi
         }
     }
 
-    // HELIX / SINK: sample the per-channel drives into the rung history at
-    // 8 Hz; a fresh low attack marks the rung as a beat. Also keep a signed
-    // waveform sample (mean of a small window) for the SINK strand projection.
-    if(histLast<0 || seconds-histLast>=1./8.){
-        histLast=seconds;
+    // HELIX / SINK: rung pushes lock to sinkClock integer boundaries - the
+    // painter's sub-row frac and histHead advance on the SAME frame.
+    if(histClock<0)histClock=std::floor(sinkClock);
+    for(int guard=0;sinkClock-histClock>=1.0 && guard<8;++guard){
+        histClock+=1.0;
         histHead=(histHead+1)%kHist;
         histL[histHead]=drive[0];
         histR[histHead]=drive[1];
@@ -163,7 +182,7 @@ void Memory::advance(const memoirs::Spectrum& s,int id,double seconds,bool playi
 
     // SONO: print quantised spectrogram rows on the 15 rows/s clock (catch
     // up after a long frame so the scroll stays gapless)
-    if(sonoLast<0)sonoLast=sonoClock;
+    if(sonoLast<0)sonoLast=std::floor(sonoClock);
     for(int guard=0;sonoClock-sonoLast>=1.0 && guard<8;++guard){
         sonoLast+=1.0;
         for(int k=0;k<43;k++)
@@ -171,7 +190,7 @@ void Memory::advance(const memoirs::Spectrum& s,int id,double seconds,bool playi
         sonoHead=(sonoHead+1)%kSonoRows;
     }
     // TRACK: print 8-channel hex rows on the 12 rows/s clock (band max)
-    if(trackLast<0)trackLast=trackClock;
+    if(trackLast<0)trackLast=std::floor(trackClock);
     for(int guard=0;trackClock-trackLast>=1.0 && guard<8;++guard){
         trackLast+=1.0;
         static const int lo[8]={0,3,7,12,18,24,30,37};

@@ -44,7 +44,9 @@ struct Memory {
     float histL[kHist]{}, histR[kHist]{};
     unsigned char histBeat[kHist]{};
     int histHead=0;
-    double histLast=-1;
+    // Rung pushes lock to sinkClock (integer boundaries) so the painter's
+    // sub-row offset and the ring head advance on the SAME frame - no tear.
+    double histClock=-1;
     // Signed waveform sample per rung (-1..1): SINK projects this onto the
     // strand's horizontal offset, so the wave itself draws the helix.
     float histWaveL[kHist]{}, histWaveR[kHist]{};
@@ -66,6 +68,11 @@ struct Memory {
     // (playing, not paused). Stopping freezes the shaft / tunnel in place;
     // resuming continues from the frozen phase instead of jumping ahead.
     double sinkClock=0, diveClock=0;
+    // dt==0 compensation: when the audio position has not ticked between two
+    // render frames, advance the visual clocks by 1/60 anyway (max 3 frames)
+    // and debit the debt from the next real dt so long-term time never drifts.
+    double clockComp=0;
+    int sameSecFrames=0;
     // SONO: 88-row quantised spectrogram history, printed at 15 rows/s.
     static constexpr int kSonoRows=88;
     std::uint8_t sono[kSonoRows][43]{};
