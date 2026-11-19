@@ -20,7 +20,8 @@
     "selFoot": "c5792d",
     "selBand": "dec8b3",
     "selStripe": "ffffff",
-    "seam": "d9ded9"
+    "seam": "d9ded9",
+    "accentHot": "e83f08"
   },
   "DARK": {
     "outer": "101216",
@@ -43,7 +44,8 @@
     "selFoot": "b4641e",
     "selBand": "323842",
     "selStripe": "ffffff",
-    "seam": "282e36"
+    "seam": "282e36",
+    "accentHot": "ff783c"
   },
   "NEON": {
     "outer": "080a12",
@@ -51,9 +53,9 @@
     "strip": "28c8a0",
     "stripHot": "ff50c8",
     "bar": "00e6ff",
-    "barLit": "783ca0",
-    "frame": "00ffdc",
-    "wave": "00b4ff",
+    "barLit": "1c5e80",
+    "frame": "2e48a8",
+    "wave": "ff3cb4",
     "ink": "e6f0ff",
     "digit": "ffdc50",
     "underline": "00ffdc",
@@ -66,7 +68,8 @@
     "selFoot": "c8288c",
     "selBand": "141a2a",
     "selStripe": "ffffff",
-    "seam": "182032"
+    "seam": "182240",
+    "accentHot": "ff2e97"
   },
   "PAPER": {
     "outer": "f6f2e8",
@@ -89,7 +92,8 @@
     "selFoot": "aa6428",
     "selBand": "e8e0ce",
     "selStripe": "ffffff",
-    "seam": "e4ded0"
+    "seam": "e4ded0",
+    "accentHot": "c83219"
   },
   "BLUEPRINT": {
     "outer": "142940",
@@ -112,6 +116,7 @@
     "selFoot": "49677c",
     "selBand": "304e66",
     "selStripe": "efe4c9",
-    "seam": "24425b"
+    "seam": "24425b",
+    "accentHot": "ffe08a"
   }
 }
