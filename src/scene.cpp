@@ -1420,15 +1420,20 @@ void PaintHelixLayout() {
         }
     }
 
-    // Two fixed spindles. Rungs keep their height while their projected
-    // width and front/back ordering reveal rotation about the shaft.
+    // One rigid rotation carries both tilted axes. Their depth offset
+    // separates the two ladders where their centre lines cross on screen.
+    const double yaw = std::fmod(clock * .075, 6.283185307179586);
+    const float cs = float(std::cos(yaw)), sn = float(std::sin(yaw));
     struct CoilPoint { float x, y, z; };
     auto coil = [&](float y, int side, int strand) -> CoilPoint {
+        const float hand = side ? 1.f : -1.f;
         const float meter = g_mem ? g_mem->meter[side] : 0.f;
-        const double turn = (y-wt)*.049 + clock*(side ? -.25 : .22) + side*.8 + strand*3.14159265;
-        const float radius = 34.f + 9.f*meter;
-        return {cx + (side ? 65.f : -65.f) + float(radius*std::sin(turn)),
-                y + float(7.*std::cos(turn)), float(std::cos(turn))};
+        const double turn = (y-wt)*.049 + side*.8 + strand*3.14159265;
+        const float radius = 27.f + 8.f*meter;
+        const float x = hand * .38f * (y - .5f*(wt+wb)) + radius*float(std::sin(turn));
+        const float depth = hand * 32.f + radius*float(std::cos(turn));
+        const float cameraDepth = depth*cs - x*sn;
+        return {cx + x*cs + depth*sn, y + .12f*cameraDepth, cameraDepth/96.f};
     };
     struct Stroke { CoilPoint a,b; int side; bool bond; };
     constexpr int step = 3, margin = 32, stepsPerBond = 4;
