@@ -1420,25 +1420,22 @@ void PaintHelixLayout() {
         }
     }
 
-    // One rigid rotation carries both tilted axes. Their depth offset
-    // separates the two ladders where their centre lines cross on screen.
-    const double yaw = std::fmod(clock * .075, 6.283185307179586);
-    const float cs = float(std::cos(yaw)), sn = float(std::sin(yaw));
+    // Two vertical shafts orbit as a rigid pair around the centreline. Each
+    // ladder still turns in place around its own shaft.
     struct CoilPoint { float x, y, z; };
-    auto coil = [&](float y, int side, int strand, bool scope=false) -> CoilPoint {
+    auto coil = [&](float y, int side, int strand) -> CoilPoint {
         const float hand = side ? 1.f : -1.f;
         const float meter = g_mem ? g_mem->meter[side] : 0.f;
         const double turn = (y-wt)*.049 + side*.8 + clock*(side ? -.17 : .20) + strand*3.14159265;
-        const float* wave = side ? g_state->spectrum.waveR : g_state->spectrum.waveL;
-        const int sample = std::clamp(int((y-wt)*239.f/(wb-wt)),0,239);
-        const float spike = std::clamp(std::abs(wave[sample])/48.f,0.f,1.f);
-        const float radius = 27.f + 8.f*meter + (scope ? 4.f + 15.f*spike*spike : 0.f);
-        const float x = hand * (.38f * (y - .5f*(wt+wb)) + 6.f*std::sin((y-wt)*.014f)) + radius*float(std::sin(turn));
-        const float depth = hand * 32.f + radius*float(std::cos(turn));
-        const float cameraDepth = depth*cs - x*sn;
-        return {cx + x*cs + depth*sn, y + .12f*cameraDepth, cameraDepth/96.f};
+        const float radius = 27.f + 8.f*meter;
+        const double yaw = std::fmod(clock*.16, 6.283185307179586);
+        const float orbitX = 54.f*float(std::cos(yaw));
+        const float orbitZ = 54.f*float(std::sin(yaw));
+        const float x = hand*orbitX + radius*float(std::sin(turn));
+        const float depth = hand*orbitZ + radius*float(std::cos(turn));
+        return {cx + x, y + .12f*depth, depth/96.f};
     };
-    struct Stroke { CoilPoint a,b; int side; bool bond; bool scope=false; };
+    struct Stroke { CoilPoint a,b; int side; bool bond; };
     constexpr int step = 3, margin = 32, stepsPerBond = 4;
     constexpr int maxSteps = (kLogicalH + 2 * margin) / step + 2;
     Stroke strokes[8 * maxSteps + 4 * (maxSteps / stepsPerBond + 1)];
@@ -1451,7 +1448,6 @@ void PaintHelixLayout() {
             for (int strand = 0; strand < 2; ++strand) {
                 const CoilPoint end = coil(y, side, strand);
                 strokes[used++] = {prev[strand], end, side, false};
-                strokes[used++] = {coil(y-step,side,strand,true),coil(y,side,strand,true),side,false,true};
                 prev[strand] = end;
             }
             if (j % stepsPerBond == 0) {
@@ -1470,7 +1466,25 @@ void PaintHelixLayout() {
         const float fade = v.bond ? .28f + .40f * (1.f-light) - .22f*(g_mem ? g_mem->coilAttack[v.side] : 0.f) : .04f + .61f * (1.f-light);
         const COLORREF ink = LerpCol(pigment, CustomPanelCol(), fade);
         GfxPoint seg[] = {ScenePoint(v.a.x,v.a.y),ScenePoint(v.b.x,v.b.y)};
-        gfx_polyline(seg,2,v.scope ? LerpCol(ink,CustomPanelCol(),.4f) : ink,S(v.bond || v.scope ? 1 : light>.58f ? 3 : 2));
+        gfx_polyline(seg,2,ink,S(v.bond ? 1 : light>.58f ? 3 : 2));
+        if (v.bond) {
+            const float dx = v.b.x - v.a.x, dy = v.b.y - v.a.y;
+            const float len = std::max(1.f, std::sqrt(dx*dx + dy*dy));
+            const float nx = -dy/len, ny = dx/len;
+            const float* wave = v.side ? g_state->spectrum.waveR : g_state->spectrum.waveL;
+            const int center = std::clamp(int((.5f*(v.a.y + v.b.y)-wt)*239.f/(wb-wt)), 0, 239);
+            constexpr int samples = 13;
+            GfxPoint trace[samples];
+            for (int k = 0; k < samples; ++k) {
+                const float u = float(k)/(samples-1);
+                const int sample = (center + (k - samples/2)*2 + 240) % 240;
+                const float signal = std::clamp(wave[sample]/72.f, -1.f, 1.f);
+                const float excursion = 3.8f * signal * std::abs(signal);
+                trace[k] = ScenePoint(v.a.x + dx*u + nx*excursion,
+                                      v.a.y + dy*u + ny*excursion);
+            }
+            gfx_polyline(trace,samples,LerpCol(ink,pigment,.48f),S(1));
+        }
     }
     gfx_pop_clip();
 
@@ -1566,7 +1580,7 @@ void PaintDiveLayout() {
         // exponential-equal spacing: 14 -> 27 -> 53 -> 104 -> 203 -> 392px,
         // every octave of depth gets one layer (no mid-field hole)
         fr[k].half = std::min(2200.f, 14.f * std::pow(28.f, u));
-        fr[k].ang = age * 0.27f + rot;               // slight spiral, not a wring
+        fr[k].ang = age * 0.38f + rot;               // stronger inter-layer offset
     }
 
     const float imp = Impact();
@@ -2009,35 +2023,72 @@ void PaintSonarLayout() {
     };
     constexpr int bearings=72;
     auto angle=[](float slot){return -1.14f+2.28f*slot/71.f;};
+    // Range grid: restrained hairlines, with a slightly stronger outer gate.
     for(int ring=1;ring<=5;++ring){
         GfxPoint arc[bearings];
         for(int j=0;j<bearings;++j) arc[j]=polar(angle(float(j)),ring*63.f);
-        gfx_polyline(arc,bearings,LerpCol(t.frame,t.panel,.65f),S(1));
+        gfx_polyline(arc,bearings,ring==5?LerpCol(t.frame,t.panel,.48f)
+                                             :LerpCol(t.frame,t.panel,.72f),S(1));
     }
     for(int spoke=0;spoke<=8;++spoke){
         const float a=angle(spoke*71.f/8);
         GfxPoint line[]={polar(a,18),polar(a,315)};
         gfx_polyline(line,2,LerpCol(t.frame,t.panel,.78f),S(1));
     }
+    // Bearing ticks live outside the active field, so they never compete
+    // with the echo marks.
+    for(int tick=0;tick<=24;++tick){
+        const float a=angle(tick*71.f/24);
+        const float inner=tick%6==0?305.f:310.f;
+        GfxPoint mark[]={polar(a,inner),polar(a,315)};
+        gfx_polyline(mark,2,LerpCol(t.panel,t.frame,tick%6==0?.75f:.38f),S(1));
+    }
     const double time=g_mem?g_mem->sonoClock:0.;
     const int now=int(std::floor(time));
-    if(g_mem) for(int age=0;age<bearings;++age){
+    // Each retained spectrum snapshot is a narrow radial contact band. Drawing
+    // oldest -> newest preserves the recent sweep as the brightest layer.
+    if(g_mem) for(int age=bearings-1;age>=0;--age){
         const int bearing=(now-age+bearings)%bearings;
         const int slot=(g_mem->sonoHead-1-age+stage::Memory::kSonoRows)%stage::Memory::kSonoRows;
+        const float life=1.f-float(age)/float(bearings);
+        const float a=angle(float(bearing));
         for(int k=0;k<43;++k){
             const float energy=g_mem->sono[slot][k]/255.f;
-            if(energy<.09f)continue;
+            if(energy<.10f)continue;
             const float r=24.f+6.8f*k;
-            GfxPoint echo[]={polar(angle(bearing-.43f),r),polar(angle(bearing+.43f),r)};
-            const float gain=energy*(1.f-.65f*age/bearings);
-            gfx_polyline(echo,2,LerpCol(t.panel,energy>.7f?t.bar:t.wave,gain),S(energy>.55f?3:2));
+            const float half=.009f+.017f*energy;
+            GfxPoint echo[]={polar(a-half,r),polar(a+half,r)};
+            const COLORREF base=energy>.78f?t.accentHot:energy>.46f?t.bar:t.wave;
+            const float gain=life*(.16f+.84f*energy);
+            gfx_polyline(echo,2,LerpCol(t.panel,base,gain),S(energy>.72f?2:1));
+            if(energy>.82f&&age<18){
+                GfxPoint needle[]={polar(a,r-3.f),polar(a,r+4.f)};
+                gfx_polyline(needle,2,LerpCol(t.panel,t.accentHot,gain*.82f),S(1));
+            }
         }
     }
-    const float sweep=angle(std::min(71.f,float(std::fmod(time,double(bearings)))));
+    const int sweepSlot=int(std::fmod(time,double(bearings)));
+    // Short retained beam trail plus one hot leading edge.
+    for(int trail=7;trail>=1;--trail){
+        const float a=angle(float((sweepSlot-trail+bearings)%bearings));
+        GfxPoint beam[]={polar(a,16),polar(a,315)};
+        gfx_polyline(beam,2,LerpCol(t.panel,t.bar,.035f*(8-trail)),S(1));
+    }
+    const float sweep=angle(std::min(71.f,float(sweepSlot)));
     GfxPoint beam[]={polar(sweep,12),polar(sweep,315)};
-    gfx_polyline(beam,2,t.bar,S(1));
-    DrawCellsTL("LOW",334,399,2);
-    DrawCellsTL("HIGH",332,72,2);
+    gfx_polyline(beam,2,LerpCol(t.bar,t.accentHot,.34f),S(1));
+    GfxPoint head[]={polar(sweep,305),polar(sweep,315)};
+    gfx_polyline(head,2,t.accentHot,S(2));
+    {
+        GfxPoint hub[]={polar(-1.14f,10),polar(1.14f,10)};
+        gfx_polyline(hub,2,LerpCol(t.frame,t.panel,.35f),S(1));
+        FillRectCol(S(318),S(402),S(322),S(408),t.accentHot);
+    }
+    char bearingText[16];
+    snprintf(bearingText,sizeof(bearingText),"BRG:%03d",sweepSlot*5);
+    DrawCellsTL("LOW",301,416,2);
+    DrawCellsTL("HIGH",301,68,2);
+    DrawCellsTL(bearingText,532,416,2);
     PaintCustomHeader("SONAR / 10");
     PaintCustomFooter(false);
 }
