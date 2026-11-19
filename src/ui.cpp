@@ -915,9 +915,9 @@ void HandleLayoutMouse(HWND hwnd, int lx, int ly, bool dbl) {
     PlayerApp& app = g_app;
     const int mode = app.settings->layoutMode;
     if (mode == layout::Stack) {
-        // compact index: x 460..620, two columns of 23, 80x16 cells
-        if (lx >= 460 && lx < 620 && ly >= 40 && ly < 408) {
-            const int col = (lx - 460) / 80, row = (ly - 40) / 16;
+        // compact index: x 460..620, two columns of 23, 80x16 cells (y 58+)
+        if (lx >= 460 && lx < 620 && ly >= 58 && ly < 426) {
+            const int col = (lx - 460) / 80, row = (ly - 58) / 16;
             const int idx = col * 23 + row;
             if (idx >= 0 && idx < kTrackCount) {
                 app.selected = idx;

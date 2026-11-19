@@ -335,8 +335,8 @@ function hitExit(x,y){return x>=156&&x<212&&y>=272&&y<288;}
 // "exit", or null. Mirrors HandleLayoutMouse in the desktop shell.
 function hitLayout(x,y){
   if(layoutMode===2){ // STACK: compact right index, two columns of 23
-    if(x>=460&&x<620&&y>=40&&y<408){
-      const i=Math.floor((x-460)/80)*23+Math.floor((y-40)/16);
+    if(x>=460&&x<620&&y>=58&&y<426){
+      const i=Math.floor((x-460)/80)*23+Math.floor((y-58)/16);
       if(i>=0&&i<names.length)return i;
     }
     return null;
