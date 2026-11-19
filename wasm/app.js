@@ -356,9 +356,8 @@ function hitLayout(x,y){
   return null; // FIELD / HELIX use the TAB grid / keyboard
 }
 // Progress rails of the custom layouts: [x0,x1,y0,y1] hit bands.
-// Shared chassis footer rail (y 454..457) for FIELD/STACK/RING/CROSS;
-// SINK/DIVE keep their legacy bands until their own rebuild lands.
-const LAYOUT_SEEK={1:[16,624,448,462],2:[16,624,448,462],3:[16,624,448,462],4:[16,624,448,462],6:[24,616,468,480]};
+// All six custom layouts share the chassis footer rail (y 454..457).
+const LAYOUT_SEEK={1:[16,624,448,462],2:[16,624,448,462],3:[16,624,448,462],4:[16,624,448,462],5:[16,624,448,462],6:[16,624,448,462]};
 function seekLayout(f){
   if(!buffer)return;
   offset=Math.max(0,Math.min(1,f))*buffer.duration;

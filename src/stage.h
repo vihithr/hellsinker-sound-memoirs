@@ -58,6 +58,10 @@ struct Memory {
     double last=-1;
     double motion=-1;
     int track=-1;
+    // SINK / DIVE standby: animation clocks advance only while audible
+    // (playing, not paused). Stopping freezes the shaft / tunnel in place;
+    // resuming continues from the frozen phase instead of jumping ahead.
+    double sinkClock=0, diveClock=0;
     void advance(const memoirs::Spectrum&, int id, double seconds, bool playing, bool paused);
 };
 struct Palette { COLORREF field, grid, line, accent, frame; };

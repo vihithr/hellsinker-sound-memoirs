@@ -1180,25 +1180,26 @@ void PaintCrossLayout() {
 }
 
 // ---- composition: SINK descent shaft (HELIX slot) --------------------------
-// Two angular strands, one per channel, zigzag down a tall shaft and cross
-// into X / # lattices. Every rung is a 1/15 s sample of that channel's drive,
-// so the lattice is a core sample of the music. The rungs scroll upward
-// while the depth gauge counts down: the view is sinking through the track.
-// Beats mark their rung in the hot color and kick the descent speed.
+// A heavy machine shaft: two 2px channel strands (L wave / R bar) wind down
+// a wide well and cross into # lattices; every rung is a 1/8 s core sample
+// of that channel. Symmetric side bays: depth gauge + L meter on the left,
+// R meter + LOW ladder + order on the right. The descent clock freezes in
+// standby - no half-dead idle spin.
 void PaintHelixLayout() {
     const Theme& t = Th();
     FillRectCol(0, 0, S(kLogicalW), S(kLogicalH), t.outer);
 
-    const bool active = g_state->current >= 0;
     const int H = stage::Memory::kHist;
 
-    // shaft geometry
-    const int wl = 210, wr = 430, wt = 56, wb = 440;
-    const int cx = 320, pitch = 10, maxOff = 86;
+    // shaft geometry: wide well with regular guide-rail gutters
+    const int wl = 176, wr = 464, wt = 34, wb = 446;
+    const int cx = 320, pitch = 10, maxOff = 118;
     const COLORREF wc = t.frame;
     FillRectCol(S(wl - 14), S(wt), S(wr + 14), S(wb), t.panel);
     FillRectCol(S(wl - 14), S(wt), S(wl - 13), S(wb), wc);
     FillRectCol(S(wr + 13), S(wt), S(wr + 14), S(wb), wc);
+    FillRectCol(S(wl - 14), S(wt), S(wr + 14), S(wt + 1), wc);
+    FillRectCol(S(wl - 14), S(wb - 1), S(wr + 14), S(wb), wc);
     if (LightTheme()) {
         const COLORREF inner = LerpCol(t.frame, t.ink, 0.25f);
         FillRectCol(S(wl - 13), S(wt), S(wl - 12), S(wb), inner);
@@ -1207,21 +1208,20 @@ void PaintHelixLayout() {
     // shaft wall ticks every rung, longer every 5th
     for (int y = wt; y <= wb; y += pitch) {
         const int len = ((y - wt) / pitch) % 5 == 0 ? 8 : 4;
-        FillRectCol(S(wl - 14), S(y), S(wl - 14 + len), S(y + 1), LerpCol(t.frame, t.outer, 0.35f));
-        FillRectCol(S(wr + 14 - len), S(y), S(wr + 14), S(y + 1), LerpCol(t.frame, t.outer, 0.35f));
+        FillRectCol(S(wl - 14), S(y), S(wl - 14 + len), S(y + 1), LerpCol(t.frame, t.panel, 0.35f));
+        FillRectCol(S(wr + 14 - len), S(y), S(wr + 14), S(y + 1), LerpCol(t.frame, t.panel, 0.35f));
     }
-    // faint dot grid inside the shaft
-    const COLORREF grid = LerpCol(t.seam, t.panel, 0.45f);
-    for (int y = wt + 6; y < wb; y += 12)
-        for (int x = wl - 4; x < wr + 4; x += 12)
-            FillRectCol(S(x), S(y), S(x + 1), S(y + 1), grid);
+    // sparse depth strata: one faint line every 40px, no dense dot matrix
+    const COLORREF strata = LerpCol(t.seam, t.panel, 0.45f);
+    for (int y = wt + 20; y < wb; y += 40)
+        FillRectCol(S(wl - 6), S(y), S(wr + 6), S(y + 1), strata);
 
-    // rung positions: continuous upward scroll locked to playback time
-    // (8 rungs/s at 10px = a calm 80px/s descent, no strobing)
-    const double scroll = active ? g_state->seconds * 8.0 : 0.0;
+    // rung positions: uniform upward scroll on the standby-aware sink clock
+    const double scroll = g_mem ? g_mem->sinkClock : 0.0;
     const int base = int(std::floor(scroll));
     const int frac = int((scroll - base) * pitch);
     const int rows = (wb - wt) / pitch + 2;
+    (void)base;
 
     // history lookup: row 0 = newest sample at the bottom of the shaft
     auto hist = [&](int row, int side) -> float {
@@ -1249,7 +1249,7 @@ void PaintHelixLayout() {
     };
 
     gfx_push_clip(S(wl - 14), S(wt + 1), S(wr + 14), S(wb - 1));
-    // rungs + cross pins, oldest at the top
+    // rungs + cross pins, oldest at the top; beat rungs carry a 2px hot bar
     for (int j = rows; j >= 0; --j) {
         const int y = wb - j * pitch + frac;
         if (y < wt - pitch || y > wb + pitch) continue;
@@ -1257,21 +1257,24 @@ void PaintHelixLayout() {
         const int xl2 = strandX(row, 0), xr2 = strandX(row, 1);
         const bool hot = beat(row);
         const bool fresh = row == 0;
-        // cross pin between the strands: the # bars (1px, quiet)
         const int pl = std::min(xl2, xr2), pr = std::max(xl2, xr2);
         if (pr - pl > 3) {
             const COLORREF pc = hot ? t.accentHot : fresh ? t.bar : t.barLit;
-            FillRectCol(S(pl + 2), S(y), S(pr - 1), S(y + 1), pc);
+            const int th = hot ? 2 : 1;
+            FillRectCol(S(pl + 2), S(y), S(pr - 1), S(y + th), pc);
         }
-        // rung nodes: 3x3 blocks; a beat only heats the node, no full flare
-        const COLORREF lc = hot ? LerpCol(t.wave, t.accentHot, 0.7f) : fresh ? t.bar : t.wave;
-        const COLORREF rc = hot ? LerpCol(t.wave, t.accentHot, 0.7f) : fresh ? t.bar
-                          : LerpCol(t.wave, t.bar, 0.45f);
-        FillRectCol(S(xl2 - 1), S(y - 1), S(xl2 + 2), S(y + 2), lc);
-        FillRectCol(S(xr2 - 1), S(y - 1), S(xr2 + 2), S(y + 2), rc);
+        // rung nodes: 5x5 blocks - hollow hard frames normally, solid on a
+        // beat / the freshest sample (machine pins, not soft dots)
+        const COLORREF lc = hot ? t.accentHot : fresh ? t.bar : t.wave;
+        const COLORREF rc = hot ? t.accentHot : fresh ? t.bar : t.bar;
+        const bool solidL = hot || fresh, solidR = hot || fresh;
+        FillRectCol(S(xl2 - 2), S(y - 2), S(xl2 + 3), S(y + 3), lc);
+        if (!solidL) FillRectCol(S(xl2 - 1), S(y - 1), S(xl2 + 2), S(y + 2), t.panel);
+        FillRectCol(S(xr2 - 2), S(y - 2), S(xr2 + 3), S(y + 3), rc);
+        if (!solidR) FillRectCol(S(xr2 - 1), S(y - 1), S(xr2 + 2), S(y + 2), t.panel);
     }
-    // strand segments between consecutive rung nodes, drawn after the pins
-    // so the strands read on top
+    // 2px strand segments between consecutive rung nodes, drawn after the
+    // pins so the strands read on top: L in wave, R in bar
     for (int j = rows; j >= 1; --j) {
         const int y0 = wb - j * pitch + frac, y1 = wb - (j - 1) * pitch + frac;
         if (y1 < wt - pitch || y0 > wb + pitch) continue;
@@ -1279,83 +1282,72 @@ void PaintHelixLayout() {
             GfxPoint seg[2] = {
                 { (std::int16_t)S(strandX(j, side)), (std::int16_t)S(y0) },
                 { (std::int16_t)S(strandX(j - 1, side)), (std::int16_t)S(y1) } };
-            const COLORREF sc = side ? LerpCol(t.wave, t.bar, 0.45f) : t.wave;
-            gfx_polyline(seg, 2, sc, 1);
+            gfx_polyline(seg, 2, side ? t.bar : t.wave, 2);
         }
     }
     gfx_pop_clip();
 
-    // ---- depth gauge (left): playback position as descent depth -----------
+    // ---- left bay: depth gauge + compact L meter (x 24..156) --------------
     {
-        const int gx = 150, gt = 70, gb = 430;
+        const int gx = 96, gt = 76, gb = 400;
+        DrawCells("DEPTH", 62, 44, 2);
         FillRectCol(S(gx), S(gt), S(gx + 1), S(gb), LerpCol(t.frame, t.outer, 0.25f));
         for (int i = 0; i <= 10; ++i) {
             const int y = gt + i * (gb - gt) / 10;
             FillRectCol(S(gx - (i % 5 == 0 ? 8 : 4)), S(y), S(gx), S(y + 1),
                         LerpCol(t.frame, t.outer, 0.30f));
         }
+        // stepped cursor block: 14x7 with a hot top edge
         const int my = gt + int(PlayProgress() * (gb - gt));
-        FillRectCol(S(gx - 12), S(my - 3), S(gx + 4), S(my + 4), t.bar);
-        FillRectCol(S(gx - 12), S(my - 3), S(gx + 4), S(my - 1), t.accentHot);
-        DrawCells("DEPTH", gx - 40, 58, 2);
+        FillRectCol(S(gx - 10), S(my - 3), S(gx + 4), S(my + 4), t.bar);
+        FillRectCol(S(gx - 10), S(my - 3), S(gx + 4), S(my - 1), t.accentHot);
         char db[24];
         snprintf(db, sizeof(db), "-%04dM", int(PlayProgress() * 9999));
-        DrawCells(db, gx - 44, 444, 3);
-    }
-
-    // ---- right column: live channel meters + low-band ladder --------------
-    for (int side = 0; side < 2; ++side) {
-        const int x = 470 + side * 20;
-        const float drive = std::clamp(g_state->wing[side], 0.f, 1.f);
-        const int n = int(drive * 24);
+        DrawCells(db, 56, 414, 3);
+        // compact L channel meter beside the gauge
+        const int mx = 126, mBot = 400;
+        const float drive = std::clamp(g_state->wing[0], 0.f, 1.f);
+        const int n = int(drive * 40);
         for (int i = 0; i < n; ++i) {
-            const int y = 300 - i * 6;
-            FillRectCol(S(x), S(y - 4), S(x + 12), S(y), i > 18 ? t.accentHot : t.strip);
+            const int y = mBot - i * 8;
+            FillRectCol(S(mx), S(y - 6), S(mx + 12), S(y), i > 30 ? t.accentHot : t.strip);
         }
-        DrawCells(side ? "R" : "L", x + 2, 310, 2);
-        // hard-edge peak-hold tick over the meter column
-        if (g_mem && g_mem->meterPeak[side] > 0.02f) {
-            const int py = 300 - int(g_mem->meterPeak[side] * 144.f);
-            FillRectCol(S(x), S(py - 2), S(x + 12), S(py), t.accentHot);
+        if (g_mem && g_mem->meterPeak[0] > 0.02f) {
+            const int py = mBot - int(g_mem->meterPeak[0] * 320.f);
+            FillRectCol(S(mx), S(py - 2), S(mx + 12), S(py), t.accentHot);
         }
+        DrawCells("L", mx + 2, 410, 2);
     }
+
+    // ---- right bay: R meter + LOW ladder + order (x 484..616) -------------
     {
-        const int lx = 470, ly = 336;
+        const int mx = 490, mBot = 400;
+        const float drive = std::clamp(g_state->wing[1], 0.f, 1.f);
+        const int n = int(drive * 40);
+        for (int i = 0; i < n; ++i) {
+            const int y = mBot - i * 8;
+            FillRectCol(S(mx), S(y - 6), S(mx + 12), S(y), i > 30 ? t.accentHot : t.strip);
+        }
+        if (g_mem && g_mem->meterPeak[1] > 0.02f) {
+            const int py = mBot - int(g_mem->meterPeak[1] * 320.f);
+            FillRectCol(S(mx), S(py - 2), S(mx + 12), S(py), t.accentHot);
+        }
+        DrawCells("R", mx + 2, 410, 2);
+        const int lx = 514, ly = 96;
+        DrawCells("LOW", lx, 82, 2);
         for (int k = 0; k < 8; ++k) {
-            const int y = ly + k * 8;
-            const int w = int(Lv(k) * 120);
-            if (w > 0) FillRectCol(S(lx), S(y), S(lx + w), S(y + 3), t.bar);
-            const int pw = int(stage::bandLevel(g_state->spectrum.barsPrev[k]) * 120);
-            if (pw > w) FillRectCol(S(lx + w), S(y), S(lx + pw), S(y + 3), t.barLit);
+            const int y = ly + k * 10;
+            const int w = int(Lv(k) * 100);
+            if (w > 0) FillRectCol(S(lx), S(y), S(lx + w), S(y + 4), t.bar);
+            const int pw = int(stage::bandLevel(g_state->spectrum.barsPrev[k]) * 100);
+            if (pw > w) FillRectCol(S(lx + w), S(y), S(lx + pw), S(y + 4), t.barLit);
         }
-        DrawCells("LOW", lx, 326, 2);
         static const char* orders[4] = { "ORDER", "ONE", "LOOP", "SHUFFLE" };
-        DrawCells(orders[g_state->localOrder % 4], lx, 412, 2);
+        DrawCells(orders[g_state->localOrder % 4], lx, 200, 2);
     }
 
-    // header / status
-    DrawCells("SOUND MEMOIRS", 24, 20, 0);
-    { const char* nm = t.name; DrawCells(nm, 616 - (int)strlen(nm) * 8, 20, 2); }
-    DrawCells("SINK : 05", 24, 36, 3);
-    DrawCells(TransportWord(), 616 - (int)strlen(TransportWord()) * 8, 36,
-              active && !g_state->libPaused ? 0 : 2);
-
-    // footer: track + name + time
-    {
-        char b[48];
-        if (g_state->current == kTrackCount) snprintf(b, sizeof(b), "NOW : LOCAL FILE");
-        else if (active) snprintf(b, sizeof(b), "NOW : TRACK %02d", g_state->current);
-        else snprintf(b, sizeof(b), "NOW : <SILENCE>");
-        DrawCells(b, 24, 462, 3);
-        char tb[32];
-        const int secs = std::max(0, int(g_state->seconds));
-        snprintf(tb, sizeof(tb), "%02d:%02d", secs / 60, secs % 60);
-        DrawCells(tb, 616 - (int)strlen(tb) * 8, 462, 3);
-    }
-    if (g_state->current == kTrackCount && g_state->libCurrentRow >= 0 &&
-        g_state->libCurrentRow < g_libNameCount && g_libNames[g_state->libCurrentRow][0]) {
-        textLib(g_libNames[g_state->libCurrentRow], 200, 456, 440, 472, t.digit);
-    }
+    PaintCustomHeader("SINK / 05");
+    PaintCustomFooter(false);
 }
 
 // ---- composition: DIVE, first-person fall through a # / DNA tunnel --------
@@ -1370,15 +1362,16 @@ void PaintDiveLayout() {
     const float kPi = 3.14159265f;
     FillRectCol(0, 0, S(kLogicalW), S(kLogicalH), t.outer);
 
-    const bool active = g_state->current >= 0;
-    const int cx = 320, cy = 240;
-    const int K = 6;                       // layers in flight: continuous stream
+    const bool active = g_state->current >= 0 && !g_state->libPaused;
+    const int cx = 320, cy = 236;
+    const int K = 4;                       // layers in flight: clean centre
     const int DS = stage::Memory::kDiveSlots;
 
-    // fall phase: strictly uniform - one layer born every 1/0.32 s. Growth is
-    // true perspective (below), so a layer is already far off-screen before
-    // its slot recycles: the stream reads as one layer passing after another.
-    const double f = active ? g_state->seconds * 0.32 : 0.35;
+    // fall phase: strictly uniform on the standby-aware dive clock - one
+    // layer born every 1/0.32 s. Growth is true perspective (below), so a
+    // layer is far off-screen before its slot recycles. Standby freezes the
+    // whole tunnel; only the beacons keep a slow 3 s breathing cycle.
+    const double f = g_mem ? g_mem->diveClock : 0.35;
     const int base = int(std::floor(f));
     const float frac = float(f - base);
 
@@ -1388,15 +1381,13 @@ void PaintDiveLayout() {
         if (!g_mem || age < 0) return 0.f;
         return g_mem->diveDrive[((age % DS) + DS) % DS];
     };
-    auto snapPhase = [&](int age) -> float {
-        if (!g_mem || age < 0) return 0.f;
-        return g_mem->divePhase[((age % DS) + DS) % DS];
-    };
 
-    struct Frame { float half; float ang; float u; int age; float drive; };
+
+    struct Frame { float half; float ang; float u; int age; float drive; float spark; };
     // K visible slots + 1 extra "just-recycled" anchor so the rail between
     // the outermost visible layer and the one that just left stays drawn.
-    Frame fr[7];
+    Frame fr[5];
+    const float rot = float(f / 0.32) * 0.28f;   // uniform 0.28 rad/s, frozen in standby
     for (int k = 0; k <= K; ++k) {
         const float u = (k + frac) / K;              // 0 new/far .. >1 left
         const int age = base - k;
@@ -1407,7 +1398,8 @@ void PaintDiveLayout() {
         const float z = std::max(0.008f, 1.f - u);
         fr[k].half = std::min(6000.f, 13.f / z);
         fr[k].drive = std::clamp(snapDrive(age), 0.f, 1.f);
-        fr[k].ang = age * 0.5f + (active ? float(g_state->seconds) * 0.55f : 0.f);
+        fr[k].spark = g_mem && age >= 0 ? g_mem->diveSpark[((age % DS) + DS) % DS] : 0.f;
+        fr[k].ang = age * 0.12f + rot;               // slight spiral, not a wring
     }
 
     // tunnel-wall rails: connect each layer's 8 vertices to the next layer's
@@ -1438,7 +1430,7 @@ void PaintDiveLayout() {
             for (int i = 0; i <= RS; ++i) {
                 const float tt = float(i) / RS;
                 const float v = std::clamp(wv[(i * 14) % 240] / 64.f, -1.f, 1.f);
-                const float disp = v * std::min(34.f, len * 0.22f);
+                const float disp = v * std::min(22.f, len * 0.14f);
                 rail[i] = { (std::int16_t)S(cx + int(ax + dx * tt + nx * disp)),
                             (std::int16_t)S(cy + int(ay + dy * tt + ny * disp)) };
             }
@@ -1457,16 +1449,6 @@ void PaintDiveLayout() {
         // depth cue: far/small layers nearly dissolve into the backdrop
         // (power curve), near layers solid - monotonic, no reversal
         const float fade = std::min(0.96f, std::pow(1.f - depth, 1.6f));
-        const COLORREF strandA = DepthInk(t.wave, fade);
-        const COLORREF strandB = DepthInk(LerpCol(t.wave, t.bar, 0.45f), fade);
-        // rungs: hot bonds pushed toward ink so they contrast on EVERY theme
-        // (light or dark), then the same far-transparent / near-solid ramp
-        const COLORREF rungHot = LerpCol(t.accentHot, t.ink, 0.3f);
-        const COLORREF rungC = DepthInk(rungHot, std::min(0.85f, fade + 0.05f));
-        const int w = 1;                             // hairline strands always
-        // helix swing: tight around the edge line; drive still sets the width
-        const float amp = F.half * (0.03f + 0.07f * F.drive);
-        const float bias = snapPhase(F.age);
         const float ca = cosf(F.ang), sa = sinf(F.ang);
         auto pt = [&](float lx, float ly) -> GfxPoint {
             return { (std::int16_t)S(cx + int(lx * ca - ly * sa)),
@@ -1510,9 +1492,16 @@ void PaintDiveLayout() {
             }
             return hit && t0 < t1;
         };
+        // # truss: four infinite lines clipped by the octagon, each drawn as
+        // a twin parallel rail whose gauge opens with the layer's frozen
+        // birth drive (1px at rest .. half*0.06 at full energy). No helix.
         const float off = F.half * 0.42f;      // # bar offset: big centre hole
-        const float sideAmp = std::min(amp, F.half * 0.16f);
-        const int ES = 40;                     // samples along the clipped span
+        const float gauge = std::max(1.f, F.half * 0.06f * F.drive);
+        const COLORREF trussC = DepthInk(t.wave, fade);
+        const COLORREF trussD = DepthInk(LerpCol(t.wave, t.bar, 0.45f), fade);
+        const COLORREF lockC = DepthInk(LerpCol(t.accentHot, t.ink, 0.25f), fade);
+        const bool hotLayer = F.drive > 0.45f || F.spark > 0.25f;
+        const int lockR = std::max(2, int(F.half * 0.03f));
         for (int e = 0; e < 4; ++e) {
             const bool horiz = e < 2;
             const float eo = (e % 2) ? off : -off;
@@ -1520,56 +1509,54 @@ void PaintDiveLayout() {
             const float dx = horiz ? 1.f : 0.f, dy = horiz ? 0.f : 1.f;
             float t0, t1;
             if (!clipLine(px, py, dx, dy, t0, t1)) continue;
-            auto edgePt = [&](float tt, float q) -> GfxPoint {
-                const float p = t0 + (t1 - t0) * tt;
-                return horiz ? pt(p, eo + q) : pt(eo + q, p);
-            };
-            // base-pair bonds every 3rd sample, uniform winding (no taper)
-            for (int i = 0; i <= ES; i += 3) {
-                const float tt = float(i) / ES;
-                const float h = sideAmp * sinf(2.f * kPi * 2.5f * tt + bias + e * 0.7f);
-                GfxPoint seg[2] = { edgePt(tt, h), edgePt(tt, -h) };
-                gfx_polyline(seg, 2, rungC, 1);
+            for (int rail = 0; rail < 2; ++rail) {
+                const float q = rail ? gauge * 0.5f : -gauge * 0.5f;
+                GfxPoint seg[2] = { horiz ? pt(t0, eo + q) : pt(eo + q, t0),
+                                    horiz ? pt(t1, eo + q) : pt(eo + q, t1) };
+                gfx_polyline(seg, 2, rail ? trussD : trussC, 1);
             }
-            // the two strands over the full clipped span, cut at the rim
-            GfxPoint sA[41], sB[41];
-            for (int i = 0; i <= ES; ++i) {
-                const float tt = float(i) / ES;
-                const float h = sideAmp * sinf(2.f * kPi * 2.5f * tt + bias + e * 0.7f);
-                sA[i] = edgePt(tt, h);
-                sB[i] = edgePt(tt, -h);
-            }
-            gfx_polyline(sA, ES + 1, strandA, w);
-            gfx_polyline(sB, ES + 1, strandB, w);
         }
-        // beacon glare: a natural flash, not a blinking square. Brightness
-        // and edge blur breathe together on a sharp pulse - at the peak the
-        // halo blooms wide and the core overexposes toward white, dazzling
-        // enough to hide the octagon's actual corner; at the trough it shrinks
-        // to a crisp point. Layered alpha squares approximate the radial glow.
+        // lock blocks at the four # crossings on high-energy layers
+        if (hotLayer) {
+            for (int sx = -1; sx <= 1; sx += 2)
+                for (int sy = -1; sy <= 1; sy += 2) {
+                    const GfxPoint p = pt(sx * off, sy * off);
+                    FillRectCol(p.x - lockR, p.y - lockR, p.x + lockR + 1, p.y + lockR + 1, lockC);
+                }
+        }
+        // pixel-native star beacons: hard core + extending orthogonal cross
+        // rays + a thin diamond frame at the flash peak. Zero soft edges, no
+        // square body at any phase; standby slows the breathing to 3 s.
         {
-            const float phase = float(g_state->tick) / 60.f * 2.f * kPi / 1.8f + k * 1.3f;
+            const float period = active ? 1.8f : 3.0f;
+            const float phase = float(g_state->tick) / 60.f * 2.f * kPi / period + k * 1.3f;
             float pulse = 0.5f + 0.5f * sinf(phase);
             pulse = pulse * pulse * pulse;                 // sharp flash peak
-            // never fully dark: a resting ember stays lit between flashes
-            const float glow = 0.22f + 0.78f * pulse;
-            const float blur = 3.f + 11.f * pulse;         // glare radius
-            // theme-coherent: halo is the hot accent, core lifts toward the
-            // theme ink (not raw white) so the glare keeps the palette's hue
-            const COLORREF halo = DepthInk(t.accentHot, fade * 0.4f);
-            const COLORREF core = LerpCol(halo, t.ink, 0.25f + 0.45f * pulse);
+            pulse = std::max(0.20f, pulse);                // resting ember floor
+            const COLORREF rayC = DepthInk(t.accentHot, fade);
+            const COLORREF coreC = pulse > 0.5f
+                ? DepthInk(LerpCol(t.accentHot, t.ink, 0.35f), fade)
+                : DepthInk(t.accentHot, fade);
+            const int len = int(2 + 12 * pulse * (0.4f + 0.6f * std::min(1.f, F.u)));
             for (int c = 0; c < 8; ++c) {
                 const int bx = oct[c].x, by = oct[c].y;
-                const int b = int(blur);
-                // true radial discs (alpha ellipse): round soft glare, no
-                // square body or hard edge at any phase
-                gfx_alpha_ellipse(bx - b - 3, by - b - 3, bx + b + 4, by + b + 4,
-                                  halo, int((26 + 50 * pulse) * glow));
-                gfx_alpha_ellipse(bx - b, by - b, bx + b + 1, by + b + 1,
-                                  halo, int((60 + 100 * pulse) * glow));
-                const int cs = 1 + int(2 * pulse);
-                gfx_alpha_ellipse(bx - cs - 1, by - cs - 1, bx + cs + 2, by + cs + 2,
-                                  core, int((120 + 110 * pulse) * glow));
+                // orthogonal 1px star rays
+                FillRectCol(bx - len, by, bx + len + 1, by + 1, rayC);
+                FillRectCol(bx, by - len, bx + 1, by + len + 1, rayC);
+                // hard core: 3x3 at the peak, a crisp 1x1 point at the trough
+                if (pulse > 0.5f) FillRectCol(bx - 1, by - 1, bx + 2, by + 2, coreC);
+                else FillRectCol(bx, by, bx + 1, by + 1, coreC);
+                // peak diamond outline
+                if (pulse > 0.65f) {
+                    const int r = 3 + int(3 * pulse);
+                    GfxPoint dia[5] = {
+                        { (std::int16_t)bx, (std::int16_t)(by - r) },
+                        { (std::int16_t)(bx + r), (std::int16_t)by },
+                        { (std::int16_t)bx, (std::int16_t)(by + r) },
+                        { (std::int16_t)(bx - r), (std::int16_t)by },
+                        { (std::int16_t)bx, (std::int16_t)(by - r) } };
+                    gfx_polyline(dia, 5, rayC, 1);
+                }
             }
         }
     }
@@ -1578,33 +1565,8 @@ void PaintDiveLayout() {
     FillRectCol(S(cx - 2), S(cy - 2), S(cx + 3), S(cy + 3), t.ink);
     FillRectCol(S(cx - 1), S(cy - 1), S(cx + 2), S(cy + 2), t.frame);
 
-    // corner readouts keep the tunnel readable as an instrument
-    DrawCells("SOUND MEMOIRS", 24, 20, 0);
-    { const char* nm = t.name; DrawCells(nm, 616 - (int)strlen(nm) * 8, 20, 2); }
-    DrawCells("DIVE : 06", 24, 36, 3);
-    DrawCells(TransportWord(), 616 - (int)strlen(TransportWord()) * 8, 36,
-              active && !g_state->libPaused ? 0 : 2);
-    {
-        char b[48];
-        if (g_state->current == kTrackCount) snprintf(b, sizeof(b), "NOW : LOCAL FILE");
-        else if (active) snprintf(b, sizeof(b), "NOW : TRACK %02d", g_state->current);
-        else snprintf(b, sizeof(b), "NOW : <SILENCE>");
-        DrawCells(b, 24, 462, 3);
-        char tb[32];
-        const int secs = std::max(0, int(g_state->seconds));
-        snprintf(tb, sizeof(tb), "%02d:%02d", secs / 60, secs % 60);
-        DrawCells(tb, 616 - (int)strlen(tb) * 8, 462, 3);
-    }
-    // thin progress rail along the very bottom
-    FillRectCol(S(24), S(474), S(616), S(476), t.seam);
-    {
-        const int end = 24 + int(592 * PlayProgress());
-        if (end > 24) FillRectCol(S(24), S(474), S(end), S(476), t.bar);
-    }
-    if (g_state->current == kTrackCount && g_state->libCurrentRow >= 0 &&
-        g_state->libCurrentRow < g_libNameCount && g_libNames[g_state->libCurrentRow][0]) {
-        textLib(g_libNames[g_state->libCurrentRow], 200, 456, 440, 472, t.digit);
-    }
+    PaintCustomHeader("DIVE / 06");
+    PaintCustomFooter(false);
 }
 
 // ---- channel rail ---------------------------------------------------------

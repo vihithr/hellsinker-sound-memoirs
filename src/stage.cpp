@@ -31,14 +31,22 @@ float channelDrive(float env,const float* wave){
 }
 void Memory::advance(const memoirs::Spectrum& s,int id,double seconds,bool playing,bool paused){
     if(id!=track || (playing && motion>=0 && (seconds+.10<motion || seconds-motion>1.0))){
-        *this=Memory{}; track=id;
+        const double sc=sinkClock, dc=diveClock;
+        *this=Memory{}; track=id; sinkClock=sc; diveClock=dc;
     }
-    if(!playing){*this=Memory{};track=id;return;}
+    if(!playing){
+        // standby lock: keep the frozen scene and clocks, zero the energy
+        const double sc=sinkClock, dc=diveClock;
+        *this=Memory{}; track=id; sinkClock=sc; diveClock=dc;
+        return;
+    }
     if(paused)return;
     float dt=motion>=0?float(seconds-motion):1.f/60.f;
     if(dt<=0)return;
     dt=std::clamp(dt,.001f,.12f);
     motion=seconds;
+    sinkClock+=dt*8.0;    // 8 rungs/s at 10px = uniform 80px/s descent
+    diveClock+=dt*0.32;   // one tunnel layer born every 1/0.32 s
 
     float low=0;
     for(int i=0;i<6;++i)low+=std::clamp(s.barsLevel[i]/96.f,0.f,1.f);
@@ -106,10 +114,10 @@ void Memory::advance(const memoirs::Spectrum& s,int id,double seconds,bool playi
         histWaveR[histHead]=-std::sin(windR);
     }
 
-    // DIVE: freeze a birth snapshot whenever a new layer spawns (0.32/s,
-    // synced with the painter). Ring of 16 slots keyed by birth index.
+    // DIVE: freeze a birth snapshot whenever a new layer spawns (0.32/s on
+    // the standby-aware dive clock, synced with the painter). Ring of 16.
     {
-        const int b=int(std::floor(seconds*0.32));
+        const int b=int(std::floor(diveClock));
         if(b>diveLastBase){
             diveLastBase=b;
             const int slot=b%kDiveSlots;
