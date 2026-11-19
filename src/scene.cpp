@@ -1363,7 +1363,6 @@ void PaintHelixLayout() {
     const Theme& t = Th();
     FillRectCol(0, 0, S(kLogicalW), S(kLogicalH), t.outer);
 
-    const int H = stage::Memory::kHist;
 
     // shaft geometry: wide well with regular guide-rail gutters
     const int wl = 176, wr = 464, wt = 34, wb = 446;
@@ -1421,43 +1420,23 @@ void PaintHelixLayout() {
         }
     }
 
-    // A broad mutual orbit carries two independent coils. Z determines
-    // occlusion at crossings, while each channel owns its local radius.
-    const double phase = clock - std::floor(clock);
-    auto levelAt = [&](float age, int side) {
-        if (!g_mem) return 0.f;
-        const float pos = std::clamp(age, 0.f, float(H - 2));
-        const int i = int(pos);
-        const int slot = (g_mem->histHead - i + H) % H;
-        const float* history = side ? g_mem->histR : g_mem->histL;
-        return history[slot] + (history[(slot + H - 1) % H] - history[slot]) * (pos - i);
-    };
-    const float liveBalance = g_mem ? g_mem->meter[1]-g_mem->meter[0] : 0.f;
+    // Two fixed spindles. Rungs keep their height while their projected
+    // width and front/back ordering reveal rotation about the shaft.
     struct CoilPoint { float x, y, z; };
     auto coil = [&](float y, int side, int strand) -> CoilPoint {
-        const float age = float(y - wt) / pitch - float(phase);
-        const double row = (y - wt) / double(pitch) - clock;
-        const double orbit = row * .233 + side * 3.14159265;
-        const double turn = row * (side ? .84 : .92) + side * 1.9 + strand * 3.14159265;
-        const float left = levelAt(age, 0), right = levelAt(age, 1);
-        const float balance = .60f * liveBalance + .40f * (right-left);
-        const float width = 39.f + 52.f * std::clamp(1.8f * std::abs(balance),0.f,1.f);
-        const float radius = 16.f + 21.f * (side ? right : left);
-        const float drift = 9.f * balance;
-        // An oblique projection exposes the return arc of each winding.
-        return {cx + drift + float(width*std::sin(orbit) + radius*std::sin(turn)),
-                y + float(.32*radius*std::cos(turn) + 4.*std::cos(orbit)),
-                float(.70*std::cos(orbit) + .30*std::cos(turn))};
+        const float meter = g_mem ? g_mem->meter[side] : 0.f;
+        const double turn = (y-wt)*.049 + clock*(side ? -.25 : .22) + side*.8 + strand*3.14159265;
+        const float radius = 34.f + 9.f*meter;
+        return {cx + (side ? 65.f : -65.f) + float(radius*std::sin(turn)),
+                y + float(7.*std::cos(turn)), float(std::cos(turn))};
     };
     struct Stroke { CoilPoint a,b; int side; bool bond; };
     constexpr int step = 3, margin = 32, stepsPerBond = 4;
     constexpr int maxSteps = (kLogicalH + 2 * margin) / step + 2;
     Stroke strokes[4 * maxSteps + 4 * (maxSteps / stepsPerBond + 1)];
     int used = 0;
-    // Anchor the rungs to the moving strands so the bonds descend with them.
-    const float shift = float(std::fmod(clock * pitch, step * stepsPerBond));
     for (int side = 0; side < 2; ++side) {
-        const float top = wt - margin + shift;
+        const float top = wt - margin;
         CoilPoint prev[] = {coil(top, side, 0), coil(top, side, 1)};
         for (int j = 1; top + j * step <= wb + margin; ++j) {
             const float y = top + j * step;
@@ -1467,19 +1446,7 @@ void PaintHelixLayout() {
                 prev[strand] = end;
             }
             if (j % stepsPerBond == 0) {
-                // Pin both ends. Deflect the midpoint across the projected
-                // rung; short, end-on rungs have correspondingly less travel.
-                const float dx = prev[1].x-prev[0].x, dy = prev[1].y-prev[0].y;
-                const float len = std::sqrt(dx*dx + dy*dy);
-                const float attack = g_mem ? g_mem->coilAttack[side] : 0.f;
-                const float amplitude = std::min(.29f*len, 16.f*attack);
-                const float swing = amplitude * float(std::sin(clock*6.1 + y*.031 + side*1.7))
-                                  / std::max(1.f,len);
-                const CoilPoint mid{.5f*(prev[0].x+prev[1].x)-dy*swing,
-                                    .5f*(prev[0].y+prev[1].y)+dx*swing,
-                                    .5f*(prev[0].z+prev[1].z)};
-                strokes[used++] = {prev[0], mid, side, true};
-                strokes[used++] = {mid, prev[1], side, true};
+                strokes[used++] = {prev[0], prev[1], side, true};
             }
         }
     }
@@ -1491,7 +1458,7 @@ void PaintHelixLayout() {
         const float light = std::clamp(.5f + .25f * (v.a.z + v.b.z), 0.f, 1.f);
         const COLORREF backbone = v.side ? t.bar : LerpCol(t.wave,t.ink,.23f);
         const COLORREF pigment = v.bond ? (LightTheme() ? t.digit : t.ink) : backbone;
-        const float fade = v.bond ? .17f + .43f * (1.f-light) : .04f + .61f * (1.f-light);
+        const float fade = v.bond ? .28f + .40f * (1.f-light) - .22f*(g_mem ? g_mem->coilAttack[v.side] : 0.f) : .04f + .61f * (1.f-light);
         const COLORREF ink = LerpCol(pigment, CustomPanelCol(), fade);
         GfxPoint seg[] = {ScenePoint(v.a.x,v.a.y),ScenePoint(v.b.x,v.b.y)};
         gfx_polyline(seg,2,ink,S(v.bond ? 1 : light>.58f ? 3 : 2));
@@ -1718,33 +1685,21 @@ void PaintDiveLayout() {
             GfxPoint rim[2] = { oct[c], oct[(c + 1) % 8] };
             gfx_polyline(rim, 2, rimC, rimW);
         }
-        // Each frequency has a narrow meter perpendicular to the gate.
-        // Keep gaps readable at 1x; distant gates have fewer subdivisions.
+        // A single luminous scope trace follows the eight faces. Each
+        // vertex samples signed PCM so it travels to either side of its rail.
         if (F.half >= 34.f) {
-            constexpr float reach = .215f;
-            const int steps = std::clamp(int(F.half * reach / 3.f), 2, 12);
-            const COLORREF body = DepthInk(t.bar, fade);
-            const COLORREF cap = DepthInk(LerpCol(t.bar, t.ink, .65f), fade);
-            for (int c = 0; c < 8; ++c) {
-                const int next = (c+1)%8;
-                const float ex = ovx[next]-ovx[c], ey = ovy[next]-ovy[c];
-                const int first = c*43/8, count = (c+1)*43/8-first;
-                for (int m=0; m<count; ++m) {
-                    const int band = first+m;
-                    const int lit = int(std::round(steps*Lv(band)));
-                    const int held = int(std::round(steps*stage::bandLevel(g_state->spectrum.barsPrev[band])));
-                    auto dash = [&](int row, COLORREF color) {
-                        const float scale = 1.f - reach * row / steps;
-                        const float u = (m+.5f)/count, halfWidth = .32f/count;
-                        GfxPoint line[] = {
-                            pt((ovx[c]+ex*(u-halfWidth))*scale,(ovy[c]+ey*(u-halfWidth))*scale),
-                            pt((ovx[c]+ex*(u+halfWidth))*scale,(ovy[c]+ey*(u+halfWidth))*scale)};
-                        gfx_polyline(line,2,color,S(1));
-                    };
-                    for(int row=1; row<=lit; ++row) dash(row, row==lit ? cap : body);
-                    if(held>lit) dash(held,cap);
-                }
+            GfxPoint trace[241];
+            for (int i=0; i<240; ++i) {
+                const int c=i/30, next=(c+1)%8;
+                const float u=(i%30)/30.f;
+                const float* wave=c%2 ? g_state->spectrum.waveR : g_state->spectrum.waveL;
+                const float offset=.22f*std::clamp(wave[i]/56.f,-1.f,1.f);
+                const float radius= .90f-offset;
+                trace[i]=pt((ovx[c]+(ovx[next]-ovx[c])*u)*radius,
+                            (ovy[c]+(ovy[next]-ovy[c])*u)*radius);
             }
+            trace[240]=trace[0];
+            gfx_polyline(trace,241,DepthInk(t.bar,fade),S(1));
         }
         // laser beacons: warm accent cross + high-contrast core, fully
         // separated from the cold framework (light themes: ink hairline
@@ -2033,6 +1988,50 @@ static void Draw7Seg(int x, int y, int digit, COLORREF lit, COLORREF unlit) {
 // Linked tape reels (left shrinks / right grows with real progress), a VFD
 // 7-segment timecode window, broadcast PPM meters with clip latches and a
 // compact VFD spectrum. Reels spin on the standby-aware deck clock.
+// Polar scan memory: bearing encodes time within the sweep and range
+// encodes frequency. Echoes come from the existing 15 Hz spectrum history.
+void PaintSonarLayout() {
+    const Theme& t=Th();
+    FillRectCol(0,0,S(640),S(480),t.outer);
+    InsetPanel(12,34,628,446);
+    auto polar=[](float angle,float radius) {
+        return ScenePoint(320.f+radius*std::sin(angle),405.f-radius*std::cos(angle));
+    };
+    constexpr int bearings=72;
+    auto angle=[](float slot){return -1.14f+2.28f*slot/71.f;};
+    for(int ring=1;ring<=5;++ring){
+        GfxPoint arc[bearings];
+        for(int j=0;j<bearings;++j) arc[j]=polar(angle(float(j)),ring*63.f);
+        gfx_polyline(arc,bearings,LerpCol(t.frame,t.panel,.65f),S(1));
+    }
+    for(int spoke=0;spoke<=8;++spoke){
+        const float a=angle(spoke*71.f/8);
+        GfxPoint line[]={polar(a,18),polar(a,315)};
+        gfx_polyline(line,2,LerpCol(t.frame,t.panel,.78f),S(1));
+    }
+    const double time=g_mem?g_mem->sonoClock:0.;
+    const int now=int(std::floor(time));
+    if(g_mem) for(int age=0;age<bearings;++age){
+        const int bearing=(now-age+bearings)%bearings;
+        const int slot=(g_mem->sonoHead-1-age+stage::Memory::kSonoRows)%stage::Memory::kSonoRows;
+        for(int k=0;k<43;++k){
+            const float energy=g_mem->sono[slot][k]/255.f;
+            if(energy<.09f)continue;
+            const float r=24.f+6.8f*k;
+            GfxPoint echo[]={polar(angle(bearing-.43f),r),polar(angle(bearing+.43f),r)};
+            const float gain=energy*(1.f-.65f*age/bearings);
+            gfx_polyline(echo,2,LerpCol(t.panel,energy>.7f?t.bar:t.wave,gain),S(energy>.55f?3:2));
+        }
+    }
+    const float sweep=angle(std::min(71.f,float(std::fmod(time,double(bearings)))));
+    GfxPoint beam[]={polar(sweep,12),polar(sweep,315)};
+    gfx_polyline(beam,2,t.bar,S(1));
+    DrawCellsTL("LOW",334,399,2);
+    DrawCellsTL("HIGH",332,72,2);
+    PaintCustomHeader("SONAR / 10");
+    PaintCustomFooter(false);
+}
+
 void PaintDeckLayout() {
     const Theme& t = Th();
     const float kPi = 3.14159265f;
@@ -2462,6 +2461,7 @@ void sceneRender(const SceneState& s, float scale, const stage::Memory& memory,
         if (layoutMode == layout::Dive) { PaintDiveLayout(); return; }
         if (layoutMode == layout::Sono) { PaintSonoLayout(); return; }
         if (layoutMode == layout::Track) { PaintTrackLayout(); return; }
+        if (layoutMode == layout::Sonar) { PaintSonarLayout(); return; }
         if (layoutMode == layout::Deck) { PaintDeckLayout(); return; }
     }
 

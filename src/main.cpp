@@ -331,7 +331,7 @@ void PrintUsage() {
     printf("  --file <path>       open and loop a local music file (also Ctrl+O or drop)\n");
     printf("  --gamedir <path>    override the HellSinker. install folder\n");
     printf("  --bench <name>      decode one track and report timing\n");
-    printf("  --layout <0..9>     composition (0 = original panel layout)\n");
+    printf("  --layout <0..10>     composition (0 = original panel layout)\n");
     printf("  --shot <path.bmp>   render one 2x frame to a BMP and exit\n");
     printf("  --theme <0..4>      palette override (use with --shot)\n");
     printf("  --stage <0..3>      playback visual override (use with --shot)\n");

@@ -34,6 +34,7 @@ const wchar_t* const kNames[Count][3] = {
     { L"Sono", L"声谱瀑布", L"ソノグラム" },
     { L"Track", L"八轨卷帘", L"トラッカー" },
     { L"Deck", L"磁带卡座", L"カセットデッキ" },
+    { L"Sonar", L"扇扫声呐", L"扇形ソナー" },
 };
 
 } // namespace
