@@ -29,6 +29,27 @@ export async function createScene(canvas, core) {
   // COLORREF is 0x00BBGGRR; CSS wants rgb(R,G,B).
   const css = c => `rgb(${c & 255},${(c >> 8) & 255},${(c >> 16) & 255})`;
 
+  // Cached radial-glare sprites (offscreen canvases) keyed by size+color.
+  // Building a Canvas gradient per beacon per frame is heavy; drawImage of a
+  // pre-rendered disc is cheap. globalAlpha applies the per-frame brightness.
+  const glareCache = new Map();
+  function glareSprite(w, h, cr, cg, cb) {
+    const key = w + "x" + h + ":" + cr + "," + cg + "," + cb;
+    let s = glareCache.get(key);
+    if (s) return s;
+    if (glareCache.size > 256) return null;
+    s = document.createElement("canvas");
+    s.width = w; s.height = h;
+    const sc = s.getContext("2d");
+    const g = sc.createRadialGradient(w / 2, h / 2, 0, w / 2, h / 2, Math.max(w, h) / 2);
+    g.addColorStop(0, `rgba(${cr},${cg},${cb},1)`);
+    g.addColorStop(1, `rgba(${cr},${cg},${cb},0)`);
+    sc.fillStyle = g;
+    sc.fillRect(0, 0, w, h);
+    glareCache.set(key, s);
+    return s;
+  }
+
   function line(x0, y0, x1, y1, color, width) {
     x0 |= 0; y0 |= 0; x1 |= 0; y1 |= 0;
     // GDI MoveToEx/LineTo excludes the destination endpoint on 1px h-lines.
@@ -116,21 +137,16 @@ export async function createScene(canvas, core) {
                       0, 0, Math.PI * 2);
           ctx.fill(); break;
         case GFX_ALPHA_ELLIPSE: {
-          // soft radial glare: alpha at centre fading to 0 at the rim
-          const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
-          const rx = Math.abs(x1 - x0) / 2, ry = Math.abs(y1 - y0) / 2;
-          const r = Math.max(rx, ry);
-          const a = (alpha / 255);
+          // soft radial glare via a cached sprite; globalAlpha = brightness
+          const w = Math.abs(x1 - x0), h = Math.abs(y1 - y0);
+          if (w <= 0 || h <= 0 || w > 128 || h > 128) break;
           const m = /rgb\((\d+),(\d+),(\d+)\)/.exec(color);
           const cr = m ? +m[1] : 255, cg = m ? +m[2] : 255, cb = m ? +m[3] : 255;
-          const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
-          g.addColorStop(0, `rgba(${cr},${cg},${cb},${a})`);
-          g.addColorStop(1, `rgba(${cr},${cg},${cb},0)`);
+          const s = glareSprite(w, h, cr, cg, cb);
+          if (!s) break;
           ctx.save();
-          ctx.fillStyle = g;
-          ctx.beginPath();
-          ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
-          ctx.fill();
+          ctx.globalAlpha = alpha / 255;
+          ctx.drawImage(s, Math.min(x0, x1), Math.min(y0, y1), w, h);
           ctx.restore();
           break;
         }

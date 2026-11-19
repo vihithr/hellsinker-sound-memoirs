@@ -201,47 +201,64 @@ void gfx_ellipse(int x0, int y0, int x1, int y1, COLORREF c) {
     Ellipse(g_dc, x0, y0, x1, y1);
 }
 
-void gfx_alpha_ellipse(int x0, int y0, int x1, int y1, COLORREF c, int alpha) {
-    if (!g_dc || alpha <= 0 || x1 <= x0 || y1 <= y0) return;
-    // Render a radial-falloff disc into a 32bpp DIB and AlphaBlend it. The
-    // per-pixel alpha gives a soft round glare with no hard edge on GDI.
-    const int w = x1 - x0, h = y1 - y0;
-    if (w > 256 || h > 256) return;
+// Cached radial-glare sprites: building a DIB per call (hundreds per frame)
+// stalls GDI, so we keep a small cache keyed by (size, color). Each sprite is
+// a premultiplied radial-falloff disc; per-frame cost is just AlphaBlend.
+namespace {
+struct GlareSprite {
+    int w = 0, h = 0;
+    COLORREF col = 0;
+    HDC dc = nullptr;
+    HBITMAP bmp = nullptr;
+};
+GlareSprite g_glare[160];
+int g_glareCount = 0;
+
+GlareSprite* glareGet(int w, int h, COLORREF c) {
+    for (int i = 0; i < g_glareCount; ++i)
+        if (g_glare[i].w == w && g_glare[i].h == h && g_glare[i].col == c)
+            return &g_glare[i];
+    if (g_glareCount >= 160) return nullptr;       // cache full: skip this glow
+    GlareSprite& s = g_glare[g_glareCount++];
+    s.w = w; s.h = h; s.col = c;
     BITMAPINFO bi{};
     bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
     bi.bmiHeader.biWidth = w;
-    bi.bmiHeader.biHeight = -h;          // top-down
+    bi.bmiHeader.biHeight = -h;
     bi.bmiHeader.biPlanes = 1;
     bi.bmiHeader.biBitCount = 32;
     bi.bmiHeader.biCompression = BI_RGB;
     void* bits = nullptr;
-    HDC mem = CreateCompatibleDC(g_dc);
-    HBITMAP dib = CreateDIBSection(mem, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
-    if (!dib) { DeleteDC(mem); return; }
-    HGDIOBJ old = SelectObject(mem, dib);
+    s.dc = CreateCompatibleDC(nullptr);
+    s.bmp = CreateDIBSection(s.dc, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+    if (!s.bmp) { DeleteDC(s.dc); s.dc = nullptr; g_glareCount--; return nullptr; }
+    SelectObject(s.dc, s.bmp);
     const float rx = w * 0.5f, ry = h * 0.5f;
     const int R = GetRValue(c), G = GetGValue(c), B = GetBValue(c);
-    const float a0 = (alpha > 255 ? 255 : alpha) / 255.f;
     std::uint32_t* px = static_cast<std::uint32_t*>(bits);
-    for (int y = 0; y < h; ++y) {
+    for (int y = 0; y < h; ++y)
         for (int x = 0; x < w; ++x) {
             const float dx = (x + 0.5f - rx) / rx, dy = (y + 0.5f - ry) / ry;
             const float d = std::sqrt(dx * dx + dy * dy);
             float a = d >= 1.f ? 0.f : (1.f - d);
-            a = a * a * a0;                       // soft radial falloff
-            const BYTE ab = (BYTE)(a * 255.f);
-            // premultiplied RGB for AC_SRC_ALPHA
-            px[y * w + x] = ((std::uint32_t)ab << 24)
+            a = a * a;                            // unit radial falloff
+            px[y * w + x] = ((std::uint32_t)(a * 255.f) << 24)
                 | ((std::uint32_t)(R * a) << 16)
                 | ((std::uint32_t)(G * a) << 8)
                 | (std::uint32_t)(B * a);
         }
-    }
-    BLENDFUNCTION bf = { AC_SRC_OVER, 0, 255, AC_SRC_ALPHA };
-    AlphaBlend(g_dc, x0, y0, w, h, mem, 0, 0, w, h, bf);
-    SelectObject(mem, old);
-    DeleteObject(dib);
-    DeleteDC(mem);
+    return &s;
+}
+} // namespace
+
+void gfx_alpha_ellipse(int x0, int y0, int x1, int y1, COLORREF c, int alpha) {
+    if (!g_dc || alpha <= 0 || x1 <= x0 || y1 <= y0) return;
+    const int w = x1 - x0, h = y1 - y0;
+    if (w > 128 || h > 128) return;
+    GlareSprite* s = glareGet(w, h, c);
+    if (!s) return;
+    BLENDFUNCTION bf = { AC_SRC_OVER, 0, (BYTE)(alpha > 255 ? 255 : alpha), AC_SRC_ALPHA };
+    AlphaBlend(g_dc, x0, y0, w, h, s->dc, 0, 0, w, h, bf);
 }
 
 void gfx_blit(int src, int sx, int sy, int sw, int sh, int dx, int dy,
