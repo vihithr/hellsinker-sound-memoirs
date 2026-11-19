@@ -1562,12 +1562,12 @@ void PaintHelixLayout() {
     PaintCustomFooter(false);
 }
 
-// ---- composition: DIVE, pure octagon spectrum light-gate tunnel ------------
-// Two self-consistent elements only: regular octagon rims whose 8 edges grow
-// 40 inward spectrum teeth (the protagonist), and 8 faint straight vanishing
-// -point guide rails (the architecture). Exponential-equal perspective keeps
-// the mid-field full; teeth depth is capped so nothing ever pierces an inner
-// layer. Star beacons are restrained pixel crosses. Standby freezes it all.
+// ---- composition: DIVE, transparent pseudo-3D tunnel in deep space ---------
+// A thin, sharp octagon wire tunnel with continuous inter-layer corner edges
+// and slim inward spectrum teeth. Through the transparent walls, minimalist
+// 1px wireframe solids (cubes / monoliths / prisms) drift in the outer void,
+// rising from the depths on the same exponential perspective and sweeping
+// past the screen edges. Warm laser beacons contrast the cold framework.
 void PaintDiveLayout() {
     const Theme& t = Th();
     const float kPi = 3.14159265f;
@@ -1582,17 +1582,17 @@ void PaintDiveLayout() {
     const int K = 5;                       // layers in flight: full mid-field
 
     // fall phase: strictly uniform on the standby-aware dive clock - one
-    // layer born every 1/0.32 s. Standby freezes the whole tunnel; only the
+    // layer born every 1/0.32 s. Standby freezes the whole space; only the
     // beacons keep a slow 3 s breathing cycle.
     const double f = g_mem ? g_mem->diveClock : 0.35;
     const int base = int(std::floor(f));
     const float frac = float(f - base);
 
     struct Frame { float half; float ang; float u; };
-    Frame fr[5];
+    Frame fr[6];                           // K visible + 1 recycled anchor
     const float rot = float(f / 0.32) * 0.24f;   // uniform 0.24 rad/s, frozen in standby
-    for (int k = 0; k < K; ++k) {
-        const float u = (k + frac) / K;              // 0 new/far .. 1 near
+    for (int k = 0; k <= K; ++k) {
+        const float u = (k + frac) / K;              // 0 new/far .. >1 left
         const int age = base - k;
         fr[k].u = u;
         // exponential-equal spacing: 14 -> 27 -> 53 -> 104 -> 203 -> 392px,
@@ -1607,18 +1607,81 @@ void PaintDiveLayout() {
     for (int k = 0; k < K; ++k)
         if (fr[k].half * 0.55f <= 430.f) nearK = k;
 
-    // architecture: 8 faint straight rails from the vanishing point to the
-    // outermost visible layer's vertices - clean depth, zero wave distortion
-    if (nearK >= 0) {
-        const Frame& N = fr[nearK];
-        const COLORREF guideC = DepthInk(t.seam, 0.45f);
+    // ---- outer void: 10 deterministic wireframe solids on golden-angle ----
+    // slots, always OUTSIDE the octagon wall, approaching on the same
+    // exponential perspective and sweeping past the screen edges.
+    {
+        for (int i = 0; i < 10; ++i) {
+            const float uObj = float(std::fmod(f * 0.55 + i / 10.0, 1.0));
+            const float theta = i * 2.39996f + rot * 0.4f;
+            const float dist = 1.55f + 0.55f * (i % 3);
+            const float size = 14.f * std::pow(24.f, uObj);   // same perspective law
+            if (size > 900.f) continue;                        // fully passed
+            const float ox = cx + dist * size * cosf(theta);
+            const float oy = cy + dist * size * sinf(theta);
+            if (ox < -260.f || ox > 900.f || oy < -260.f || oy > 740.f) continue;
+            const float s = std::min(120.f, size * 0.30f);     // solid half-size
+            const COLORREF oc = DepthInk(t.wave, 0.35f + 0.55f * (1.f - uObj));
+            // back face shrinks toward the vanishing point (0.78x)
+            auto P = [&](float dx, float dy, float shrink) -> GfxPoint {
+                const float px = cx + (ox - cx + dx) * shrink;
+                const float py = cy + (oy - cy + dy) * shrink;
+                return { (std::int16_t)S(int(px)), (std::int16_t)S(int(py)) };
+            };
+            auto edge = [&](GfxPoint a, GfxPoint b) {
+                GfxPoint seg[2] = { a, b };
+                gfx_polyline(seg, 2, oc, S(1));
+            };
+            const int kind = i % 3;
+            if (kind == 0) {
+                // perspective cube: front square + shrunken back square + 4 legs
+                const GfxPoint f0 = P(-s, -s, 1.f), f1 = P(s, -s, 1.f),
+                               f2 = P(s, s, 1.f),  f3 = P(-s, s, 1.f);
+                const GfxPoint b0 = P(-s, -s, .78f), b1 = P(s, -s, .78f),
+                               b2 = P(s, s, .78f),  b3 = P(-s, s, .78f);
+                edge(f0, f1); edge(f1, f2); edge(f2, f3); edge(f3, f0);
+                edge(b0, b1); edge(b1, b2); edge(b2, b3); edge(b3, b0);
+                edge(f0, b0); edge(f1, b1); edge(f2, b2); edge(f3, b3);
+            } else if (kind == 1) {
+                // tall narrow monolith
+                const float w = s * 0.38f, h = s * 1.5f;
+                const GfxPoint f0 = P(-w, -h, 1.f), f1 = P(w, -h, 1.f),
+                               f2 = P(w, h, 1.f),  f3 = P(-w, h, 1.f);
+                const GfxPoint b0 = P(-w, -h, .78f), b1 = P(w, -h, .78f),
+                               b2 = P(w, h, .78f),  b3 = P(-w, h, .78f);
+                edge(f0, f1); edge(f1, f2); edge(f2, f3); edge(f3, f0);
+                edge(b0, b1); edge(b1, b2); edge(b2, b3); edge(b3, b0);
+                edge(f0, b0); edge(f1, b1); edge(f2, b2); edge(f3, b3);
+            } else {
+                // triangular prism
+                const GfxPoint f0 = P(0.f, -s, 1.f), f1 = P(s, s * .8f, 1.f),
+                               f2 = P(-s, s * .8f, 1.f);
+                const GfxPoint b0 = P(0.f, -s, .78f), b1 = P(s, s * .8f, .78f),
+                               b2 = P(-s, s * .8f, .78f);
+                edge(f0, f1); edge(f1, f2); edge(f2, f0);
+                edge(b0, b1); edge(b1, b2); edge(b2, b0);
+                edge(f0, b0); edge(f1, b1); edge(f2, b2);
+            }
+        }
+    }
+
+    // ---- continuous corridor edges: connect each layer's 8 vertices to ----
+    // the next layer's corresponding vertex (incl. the recycled anchor), so
+    // the transparent tunnel reads as one connected 3D walkway.
+    for (int k = 0; k + 1 <= K; ++k) {
+        const Frame& A = fr[k];
+        const Frame& B = fr[k + 1];
+        const float depth = std::min(1.f, A.u);
+        const float fade = std::pow(1.f - depth, 1.35f);
+        const COLORREF ec = DepthInk(CustomFrameCol(), 0.25f + 0.65f * fade);
         for (int c = 0; c < 8; ++c) {
-            const float a = kPi / 8.f + c * kPi / 4.f + N.ang;
-            GfxPoint rail[2] = {
-                { (std::int16_t)S(cx), (std::int16_t)S(cy) },
-                { (std::int16_t)S(cx + int(N.half * cosf(a))),
-                  (std::int16_t)S(cy + int(N.half * sinf(a))) } };
-            gfx_polyline(rail, 2, guideC, S(1));
+            const float aa = kPi / 8.f + c * kPi / 4.f;
+            GfxPoint seg[2] = {
+                { (std::int16_t)S(cx + int(A.half * cosf(aa + A.ang))),
+                  (std::int16_t)S(cy + int(A.half * sinf(aa + A.ang))) },
+                { (std::int16_t)S(cx + int(B.half * cosf(aa + B.ang))),
+                  (std::int16_t)S(cy + int(B.half * sinf(aa + B.ang))) } };
+            gfx_polyline(seg, 2, ec, S(1));
         }
     }
 
@@ -1641,18 +1704,17 @@ void PaintDiveLayout() {
             ovy[c] = F.half * sinf(a);
             oct[c] = pt(ovx[c], ovy[c]);
         }
-        // octagon rim: 1px normally; the nearest layer's rim steps to 3px
-        // accentHot on a beat (low band drives the big skeleton)
+        // octagon rim: thin 1px cold frame; the nearest layer steps to 2px
+        // accentHot on a beat (kept slim - no chunky 3px slab)
         const bool rimHot = imp > 0.08f && k == nearK;
-        const int rimW = rimHot ? S(3) : S(1);
-        const COLORREF rimC = rimHot ? t.accentHot : DepthInk(t.frame, fade);
+        const int rimW = rimHot ? S(2) : S(1);
+        const COLORREF rimC = rimHot ? t.accentHot : DepthInk(CustomFrameCol(), fade);
         for (int c = 0; c < 8; ++c) {
             GfxPoint rim[2] = { oct[c], oct[(c + 1) % 8] };
             gfx_polyline(rim, 2, rimC, rimW);
         }
-        // spectrum light-gate: 8 edges x 5 segments = 40 live bands growing
-        // inward as solid trapezoid teeth. Depth capped at half*0.16 so the
-        // teeth never reach the next inner octagon - clean black-hole centre.
+        // spectrum teeth: slim sharp inward needles (35% segment duty, max
+        // depth half*0.14) - light, agile, never a fat slab wall
         if (F.half >= 34.f) {
             const COLORREF toothC = DepthInk(t.bar, fade);
             const COLORREF tailC = DepthInk(t.barLit, fade);
@@ -1662,7 +1724,6 @@ void PaintDiveLayout() {
                 const float el = std::sqrt(ex * ex + ey * ey);
                 if (el < 4.f) continue;
                 const float ux = ex / el, uy = ey / el;
-                // inward normal (toward the centre)
                 float nx = -uy, ny = ux;
                 const float mx = (ovx[c] + ovx[n]) * 0.5f, my = (ovy[c] + ovy[n]) * 0.5f;
                 if (mx * nx + my * ny > 0.f) { nx = -nx; ny = -ny; }
@@ -1670,9 +1731,9 @@ void PaintDiveLayout() {
                     const int band = c * 5 + m;
                     const float lv = Lv(band);
                     const float pv = stage::bandLevel(g_state->spectrum.barsPrev[band]);
-                    const float d = F.half * 0.16f * lv;
-                    const float pd = F.half * 0.16f * pv;
-                    const float s0 = (m + 0.12f) / 5.f, s1 = (m + 0.88f) / 5.f;
+                    const float d = F.half * 0.14f * lv;
+                    const float pd = F.half * 0.14f * pv;
+                    const float s0 = (m + 0.325f) / 5.f, s1 = (m + 0.675f) / 5.f;
                     const float ax = ovx[c] + ex * s0, ay = ovy[c] + ey * s0;
                     const float bx = ovx[c] + ex * s1, by = ovy[c] + ey * s1;
                     if (pd > d + 1.f) {
@@ -1691,18 +1752,21 @@ void PaintDiveLayout() {
                 }
             }
         }
-        // restrained pixel star beacons: 1px orthogonal cross + hard core,
-        // no diamond frame. All offsets S()-scaled (2x-safe).
+        // laser beacons: warm accent cross + high-contrast core, fully
+        // separated from the cold framework (light themes: ink hairline
+        // cross; dark themes: near-white hot core). All offsets S()-scaled.
         {
             const float period = active ? 1.8f : 3.0f;
             const float phase = float(g_state->tick) / 60.f * 2.f * kPi / period + k * 1.3f;
             float pulse = 0.5f + 0.5f * sinf(phase);
             pulse = pulse * pulse * pulse;                 // sharp flash peak
             pulse = std::max(0.20f, pulse);                // resting ember floor
-            const COLORREF rayC = DepthInk(t.accentHot, fade);
-            const COLORREF coreC = pulse > 0.5f
-                ? DepthInk(LerpCol(t.accentHot, t.ink, 0.35f), fade)
+            const COLORREF rayC = LightTheme()
+                ? DepthInk(t.ink, fade * 0.6f)
                 : DepthInk(t.accentHot, fade);
+            const COLORREF coreC = LightTheme()
+                ? DepthInk(t.accentHot, fade * 0.5f)
+                : DepthInk(LerpCol(t.accentHot, RGB(255, 255, 255), 0.55f), fade * 0.6f);
             const int len = S(int(2 + 8 * pulse * std::min(1.f, F.u)));
             const int core = pulse > 0.5f ? S(2) : S(1);
             const int rayW = S(1);
@@ -1714,10 +1778,6 @@ void PaintDiveLayout() {
             }
         }
     }
-
-    // the vanishing point: the centre dot every frame is born from
-    FillRectCol(S(cx - 2), S(cy - 2), S(cx + 3), S(cy + 3), t.ink);
-    FillRectCol(S(cx - 1), S(cy - 1), S(cx + 2), S(cy + 2), t.frame);
 
     gfx_pop_clip();
     PaintCustomHeader("DIVE / 06");
