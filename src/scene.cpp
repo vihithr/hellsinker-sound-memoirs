@@ -260,6 +260,73 @@ static void textLib(const char* text, int x, int y, int right, int bottom,
     }
 }
 
+// ---- shared custom-layout chassis -----------------------------------------
+// Every custom composition mounts into the same chassis: a solid header
+// strip (y 0..28) carrying the machine plate and transport badge, and a
+// footer strip (y 452..480) with the full-width seek rail, now-playing line
+// and key hints. No loose readouts float in the corners any more.
+void PaintCustomHeader(const char* layoutCode) {
+    const Theme& t = Th();
+    FillRectCol(0, 0, S(kLogicalW), S(28), t.panel);
+    FillRectCol(0, S(27), S(kLogicalW), S(28), t.frame);
+    if (LightTheme())
+        FillRectCol(0, S(26), S(kLogicalW), S(27), LerpCol(t.frame, t.ink, 0.25f));
+    // machine plate: 3px signal block + heavy title + composition code
+    FillRectCol(S(12), S(8), S(15), S(21), t.bar);
+    DrawCells("SOUND MEMOIRS", 22, 10, 0);
+    DrawCells(layoutCode, 136, 10, 2);
+    // right: theme name + transport badge with a play indicator lamp
+    const char* nm = t.name;
+    DrawCells(nm, 536 - (int)strlen(nm) * 8, 10, 2);
+    const char* tw = TransportWord();
+    const bool playing = g_state->current >= 0 && !g_state->libPaused && !g_state->loading;
+    const int tx = 616 - (int)strlen(tw) * 8;
+    DrawCells(tw, tx, 10, playing ? 0 : 2);
+    const bool blink = (g_state->tick % 30) < 20;
+    if (playing || (g_state->libPaused && blink))
+        FillRectCol(S(tx - 10), S(13), S(tx - 6), S(17), t.accentHot);
+}
+
+void PaintCustomFooter(bool showGridHint) {
+    const Theme& t = Th();
+    FillRectCol(0, S(452), S(kLogicalW), S(kLogicalH), t.panel);
+    FillRectCol(0, S(452), S(kLogicalW), S(453), t.frame);
+    if (LightTheme())
+        FillRectCol(0, S(453), S(kLogicalW), S(454), LerpCol(t.frame, t.ink, 0.25f));
+    // full-width seek rail embedded in the footer's top edge
+    FillRectCol(S(16), S(454), S(624), S(457), t.seam);
+    const int end = 16 + int(608 * PlayProgress());
+    if (end > 16) FillRectCol(S(16), S(454), S(end), S(457), t.bar);
+    const bool blink = (g_state->tick % 30) < 20;
+    if (g_state->current >= 0 && (!g_state->libPaused || blink))
+        FillRectCol(S(end - 1), S(453), S(end + 2), S(460),
+                    LerpCol(t.accentHot, t.ink, 0.25f));
+    // now playing (local files keep their real CJK title via textLib)
+    if (g_state->current == kTrackCount && g_state->libCurrentRow >= 0 &&
+        g_state->libCurrentRow < g_libNameCount && g_libNames[g_state->libCurrentRow][0]) {
+        DrawCells("NOW :", 16, 461, 3);
+        textLib(g_libNames[g_state->libCurrentRow], 64, 460, 400, 472, t.digit);
+    } else {
+        char b[48];
+        if (g_state->current == kTrackCount) snprintf(b, sizeof(b), "NOW : LOCAL FILE");
+        else if (g_state->current >= 0) snprintf(b, sizeof(b), "NOW : TRACK %02d", g_state->current);
+        else snprintf(b, sizeof(b), "NOW : <SILENCE>");
+        DrawCells(b, 16, 461, 3);
+    }
+    {
+        char tb[32];
+        const int secs = std::max(0, int(g_state->seconds));
+        snprintf(tb, sizeof(tb), "%02d:%02d", secs / 60, secs % 60);
+        DrawCells(tb, 616 - (int)strlen(tb) * 8, 461, 3);
+    }
+    DrawCells(showGridHint ? "TAB GRID / F9" : "F7 VISUAL / F9", 16, 473, 2);
+    {
+        char sb[16];
+        snprintf(sb, sizeof(sb), "SEL:TR:%02d", std::max(0, g_state->selected));
+        DrawCells(sb, 616 - (int)strlen(sb) * 8, 473, 2);
+    }
+}
+
 // ---- painting ------------------------------------------------------------
 
 // Level meter (asm 0x7F1E43..0x7F20DA): count = abs(int(env/32767*90));
@@ -578,129 +645,70 @@ void PaintWings(int style) {
 void PaintFieldLayout() {
     const Theme& t = Th();
     const float imp = Impact();
+    const float spark = g_mem ? g_mem->highSpark : 0.f;
     FillRectCol(0, 0, S(kLogicalW), S(kLogicalH), t.outer);
 
-    // instrument paper: faint dot grid gives the empty upper field a scale
-    const COLORREF grid = LerpCol(t.seam, t.panel, 0.35f);
-    for (int y = 64; y < 330; y += 16)
-        for (int x = 24; x < 620; x += 16)
-            FillRectCol(S(x), S(y), S(x + 1), S(y + 1), grid);
+    // main display window: the single visual protagonist of this layout
+    InsetPanel(16, 34, 624, 446);
 
-    // corner brackets frame the field
-    for (int cx2 : { 20, 618 }) {
-        const int dir = cx2 < 320 ? 1 : -1;
-        FillRectCol(S(cx2), S(56), S(cx2 + dir * 14), S(57), t.frame);
-        FillRectCol(S(cx2), S(56), S(cx2 + dir), S(70), t.frame);
-        FillRectCol(S(cx2), S(424), S(cx2 + dir * 14), S(425), t.frame);
-        FillRectCol(S(cx2), S(411), S(cx2 + dir), S(425), t.frame);
+    // ---- upper spectrum field (y 44..326): 43 flat two-tone columns -------
+    const int baseY = 326;
+    // sparse dB reference dotted lines (3, not a full-screen dot matrix)
+    const COLORREF ref = LerpCol(t.seam, t.panel, 0.30f);
+    for (int r = 0; r < 3; ++r) {
+        const int y = baseY - 66 * (r + 1);
+        for (int x = 28; x < 612; x += 8)
+            FillRectCol(S(x), S(y), S(x + 2), S(y + 1), ref);
     }
-
-    const int baseY = 340;
-    // baseline flares on a beat: the whole field reads the hit at a glance
-    FillRectCol(0, S(baseY), S(kLogicalW), S(baseY + 2),
-                imp > 0.06f ? LerpCol(t.frame, t.accentHot, std::min(1.f, imp * 1.4f))
-                            : LerpCol(t.frame, t.outer, 0.42f));
-    if (imp > 0.25f)
-        FillRectCol(0, S(baseY - 1), S(kLogicalW), S(baseY), LerpCol(t.frame, t.panel, 0.4f));
-
-    // low-band energy strip across the top: one big shape that loads on beats
-    {
-        const float low = std::clamp((Lv(0) + Lv(1) + Lv(2) + Lv(3)) * 0.25f, 0.f, 1.f);
-        const int w = int(low * 592);
-        FillRectCol(S(24), S(46), S(616), S(48), t.seam);
-        if (w > 0) FillRectCol(S(24), S(44), S(24 + w), S(50), t.bar);
-        DrawCells("LOW", 24, 36, 2);
-        const int mw = int(std::clamp(g_state->wing[0], 0.f, 1.f) * 288);
-        const int mw2 = int(std::clamp(g_state->wing[1], 0.f, 1.f) * 288);
-        if (mw > 0) FillRectCol(S(24), S(52), S(24 + mw), S(54), t.wave);
-        if (mw2 > 0) FillRectCol(S(616 - mw2), S(52), S(616), S(54), t.wave);
-    }
-
     const int cols = memoirs::kSpectrumBands;
     const int pitch = 14, barW = 12;
     const int x0 = (kLogicalW - cols * pitch) / 2;
     for (int k = 0; k < cols; ++k) {
         const float lv = Lv(k);
         const int x1 = x0 + k * pitch, x2 = x1 + barW;
-        const int up = int(lv * 258);
-        // flat two-tone segments, the original window's language: current
-        // level in bar, decay tail (old smoothed state) in barLit
+        const int up = int(lv * 264);
         for (int y = baseY - up; y < baseY; y += 3)
             FillRectCol(S(x1), S(y), S(x2), S(std::min(y + 2, baseY)), t.bar);
-        const int prevUp = int(stage::bandLevel(g_state->spectrum.barsPrev[k]) * 258);
+        const int prevUp = int(stage::bandLevel(g_state->spectrum.barsPrev[k]) * 264);
         for (int y = baseY - prevUp; y < baseY - up; y += 3)
             FillRectCol(S(x1), S(y), S(x2), S(std::min(y + 2, baseY - up)), t.barLit);
-        const int down = int(lv * 46);
-        if (down > 1) {
-            FillRectCol(S(x1), S(baseY + 2), S(x2), S(baseY + 2 + down),
-                        LerpCol(t.bar, t.outer, 0.30f));
-        }
     }
-
-    // frequency ticks and labels sit below the mirrored tail
+    // beat: the baseline steps 1px -> 3px solid accent; HF spark lights the
+    // frequency ticks below (three-band division of labour)
+    if (imp > 0.08f)
+        FillRectCol(S(24), S(baseY), S(616), S(baseY + 3), t.accentHot);
+    else
+        FillRectCol(S(24), S(baseY), S(616), S(baseY + 1),
+                    LerpCol(t.frame, t.panel, 0.35f));
     for (int i = 0; i < 8; ++i) {
         const int x = 48 + i * 78;
-        FillRectCol(S(x), S(baseY + 4), S(x + 1), S(baseY + 50),
-                    LerpCol(t.frame, t.outer, 0.55f));
+        FillRectCol(S(x), S(baseY + 3), S(x + 1), S(baseY + 9),
+                    spark > 0.15f ? t.accentHot : LerpCol(t.frame, t.panel, 0.45f));
         const int len = (int)strlen(kFreqLabel[i]);
-        DrawCells(kFreqLabel[i], x - 4 * len + 4, baseY + 52, 4);
+        DrawCells(kFreqLabel[i], x - 4 * len + 4, baseY + 12, 4);
     }
 
-    // Channel traces: left channel above the baseline, right below, so the
-    // two never paint over each other. A beat swells the upper trace and
-    // heats its color; the lower trace stays the cool reference.
+    // ---- lower independent stereo scope slot (y 346..436) -----------------
+    // L above, R below; 2px traces that never cross the spectrum columns.
+    FillRectCol(S(24), S(346), S(616), S(347), LerpCol(t.frame, t.panel, 0.45f));
     GfxPoint pts[120];
     for (int side = 0; side < 2; ++side) {
         const float* wv = side ? g_state->spectrum.waveR : g_state->spectrum.waveL;
-        const int reach = side ? 56 : 62 + int(imp * 46.f);
+        const int cy = side ? 414 : 370;
+        FillRectCol(S(56), S(cy), S(616), S(cy + 1), LerpCol(t.seam, t.panel, 0.30f));
         for (int i = 0; i < 120; ++i) {
             const float v = std::clamp(wv[i * 2] / 64.0f, -1.f, 1.f);
-            pts[i].x = (std::int16_t)S(i * kLogicalW / 119);
-            pts[i].y = (std::int16_t)S(baseY + (side ? 2 + int(v * reach) : -2 - int(v * reach)));
+            pts[i].x = (std::int16_t)S(56 + i * 560 / 119);
+            pts[i].y = (std::int16_t)S(cy + int(v * 20));
         }
         gfx_polyline(pts, 120,
-                     side ? LerpCol(t.wave, t.outer, 0.38f)
-                          : LerpCol(t.wave, t.accentHot, imp * 0.8f), 2);
+                     side ? LerpCol(t.wave, t.bar, 0.40f)
+                          : LerpCol(t.wave, t.accentHot, imp * 0.6f), 2);
+        DrawCells(side ? "CH:R" : "CH:L", 22, cy - 5, 2);
     }
 
-    DrawCells("SOUND MEMOIRS", 24, 24, 0);
-    {
-        const char* themeName = t.name;
-        const int w = (int)strlen(themeName) * 8;
-        DrawCells(themeName, 616 - w, 24, 2);
-    }
-    DrawCells(TransportWord(), 24, 40, g_state->current >= 0 && !g_state->libPaused ? 0 : 2);
-
-    // wide progress rail above the status lines
-    {
-        FillRectCol(S(24), S(438), S(616), S(440), t.seam);
-        const int end = 24 + int(592 * PlayProgress());
-        if (end > 24) FillRectCol(S(24), S(438), S(end), S(440), t.bar);
-        if (g_state->current >= 0)
-            FillRectCol(S(end - 1), S(436), S(end + 2), S(442),
-                        LerpCol(t.accentHot, t.ink, 0.25f));
-    }
-
-    std::string now;
-    if (g_state->current == kTrackCount) now = "NOW PLAYING : LOCAL FILE";
-    else if (g_state->current >= 0) {
-        char b[48];
-        snprintf(b, sizeof(b), "NOW PLAYING : TRACK %02d", g_state->current);
-        now = b;
-    } else now = "<SILENCE>";
-    DrawCells(now.c_str(), 24, 452, 3);
-    {
-        char tb[32];
-        int secs = max(0, (int)g_state->seconds);
-        snprintf(tb, sizeof(tb), "TIME : %02dSEC", secs);
-        DrawCells(tb, 616 - (int)strlen(tb) * 8, 452, 3);
-    }
-    DrawCells("TAB GRID / F9 LAYOUT", 24, 466, 2);
-    {
-        char sb[16];
-        snprintf(sb, sizeof(sb), "SEL:TR:%02d", std::max(0, g_state->selected));
-        DrawCells(sb, 616 - (int)strlen(sb) * 8, 466, 2);
-    }
+    PaintCustomHeader("FIELD / 01");
+    PaintCustomFooter(true);
 
     if (g_state->showGridOverlay) {
         AlphaFill(0, 0, S(kLogicalW), S(kLogicalH), RGB(10, 12, 16), 0x8C);
@@ -717,86 +725,93 @@ void PaintFieldLayout() {
 void PaintStackLayout() {
     const Theme& t = Th();
     FillRectCol(0, 0, S(kLogicalW), S(kLogicalH), t.outer);
+    const float imp = Impact();
 
-    FillRectCol(0, 0, S(kLogicalW), S(24), t.panel);
-    FillRectCol(0, S(23), S(kLogicalW), S(24), t.frame);
-    DrawCells("SOUND MEMOIRS", 16, 8, 0);
-    { const char* nm = t.name; DrawCells(nm, 616 - (int)strlen(nm) * 8, 8, 2); }
-
-    // left: two channel meters, bottom-up, with a slow-falling peak marker
+    // ---- left rack: L/R level meters in a compact framed bay (x 12..68) ---
+    InsetPanel(12, 34, 68, 446);
+    const int mTop = 60, mBot = 420;                 // 60 cells of 6px
     for (int side = 0; side < 2; ++side) {
-        const int x1 = side ? 44 : 18, x2 = side ? 56 : 30;
+        const int x1 = side ? 48 : 18, x2 = x1 + 14;
         const float drive = std::clamp((side ? g_state->spectrum.envR : g_state->spectrum.envL) * 2.2f, 0.f, 1.f);
         const int n = std::clamp(int(drive * 60.0f), 0, 60);
         for (int i = 0; i < n; ++i) {
-            const int y2 = 440 - i * 6;
+            const int y2 = mBot - i * 6;
             FillRectCol(S(x1), S(y2 - 5), S(x2), S(y2),
                         i > 44 ? t.accentHot : t.strip);
         }
-        // dormant scale: faint dots every 6 cells so silence still reads gauge
         for (int i = n; i < 60; i += 6) {
-            const int y2 = 440 - i * 6;
+            const int y2 = mBot - i * 6;
             FillRectCol(S(x1 + 4), S(y2 - 1), S(x2 - 4), S(y2),
-                        LerpCol(t.seam, t.outer, 0.35f));
+                        LerpCol(t.seam, t.panel, 0.35f));
         }
-        DrawCells(side ? "R" : "L", x1 + 1, 446, 2);
         // hard-edge peak-hold tick (0.8 s hold, then slow fall)
         if (g_mem && g_mem->meterPeak[side] > 0.02f) {
-            const int py = 440 - int(g_mem->meterPeak[side] * 360.f);
+            const int py = mBot - int(g_mem->meterPeak[side] * 360.f);
             FillRectCol(S(x1), S(py - 2), S(x2), S(py), t.accentHot);
         }
+        DrawCells(side ? "R" : "L", x1 + 3, 428, 2);
+    }
+    // dB scale in the 6px gutter between the meters: 0 / -6 / -12 / -24
+    {
+        const int db[4] = { 0, 6, 12, 24 };
+        for (int i = 0; i < 4; ++i) {
+            const float lv = std::pow(10.f, -db[i] / 20.f);
+            const int y = mBot - int(lv * 360.f);
+            FillRectCol(S(36), S(y), S(44), S(y + 1), LerpCol(t.frame, t.panel, 0.30f));
+        }
+        DrawCells("DB", 33, 44, 2);
     }
 
-    // centre display
-    const int cl = 96, ct = 32, cr = 400, cb = 440;
+    // ---- centre display: the protagonist (x 76..452, 376px wide) ----------
+    const int cl = 76, ct = 34, cr = 452, cb = 446;
     InsetPanel(cl, ct, cr, cb);
-
-    const int baseY = 330;
+    const int baseY = 344;
     const int cols = memoirs::kSpectrumBands;
-    const int pitch = 6, barW = 5;
+    const int pitch = 8, barW = 6;                   // near-original proportions
     const int x0 = cl + 1 + ((cr - cl - 2) - cols * pitch) / 2;
+    // sparse dB reference dotted lines
+    const COLORREF ref = LerpCol(t.seam, t.panel, 0.30f);
+    for (int r = 0; r < 3; ++r) {
+        const int y = baseY - 70 * (r + 1);
+        for (int x = cl + 8; x < cr - 8; x += 8)
+            FillRectCol(S(x), S(y), S(x + 2), S(y + 1), ref);
+    }
     for (int k = 0; k < cols; ++k) {
         const float lv = Lv(k);
         const int x1 = x0 + k * pitch, x2 = x1 + barW;
-        const int up = int(lv * 238);
+        const int up = int(lv * 268);
         for (int y = baseY - up; y < baseY; y += 3)
             FillRectCol(S(x1), S(y), S(x2), S(std::min(y + 2, baseY)), t.bar);
-        const int prevUp = int(stage::bandLevel(g_state->spectrum.barsPrev[k]) * 238);
+        const int prevUp = int(stage::bandLevel(g_state->spectrum.barsPrev[k]) * 268);
         for (int y = baseY - prevUp; y < baseY - up; y += 3)
             FillRectCol(S(x1), S(y), S(x2), S(std::min(y + 2, baseY - up)), t.barLit);
-        const int down = int(lv * 22);
-        if (down > 1)
-            FillRectCol(S(x1), S(baseY + 1), S(x2), S(baseY + 1 + down),
-                        LerpCol(t.bar, t.outer, 0.30f));
     }
+    if (imp > 0.08f)
+        FillRectCol(S(cl + 4), S(baseY), S(cr - 4), S(baseY + 3), t.accentHot);
+    else
+        FillRectCol(S(cl + 4), S(baseY), S(cr - 4), S(baseY + 1),
+                    LerpCol(t.frame, t.panel, 0.35f));
 
-    // lower half: the two channel traces
+    // lower 90px: independent stereo scope area
+    FillRectCol(S(cl + 4), S(352), S(cr - 4), S(353), LerpCol(t.frame, t.panel, 0.45f));
     GfxPoint pts[120];
     for (int side = 0; side < 2; ++side) {
         const float* wv = side ? g_state->spectrum.waveR : g_state->spectrum.waveL;
-        const int cy = side ? 416 : 392;
+        const int cy = side ? 420 : 378;
+        FillRectCol(S(cl + 34), S(cy), S(cr - 6), S(cy + 1), LerpCol(t.seam, t.panel, 0.30f));
         for (int i = 0; i < 120; ++i) {
             const float v = std::clamp(wv[i * 2] / 64.0f, -1.f, 1.f);
-            pts[i].x = (std::int16_t)S(cl + 4 + i * (cr - cl - 8) / 119);
+            pts[i].x = (std::int16_t)S(cl + 34 + i * (cr - cl - 40) / 119);
             pts[i].y = (std::int16_t)S(cy + int(v * 18));
         }
-        gfx_polyline(pts, 120, side ? LerpCol(t.wave, t.bar, 0.45f) : t.wave, 1);
+        gfx_polyline(pts, 120, side ? LerpCol(t.wave, t.bar, 0.45f) : t.wave, 2);
+        DrawCells(side ? "R" : "L", cl + 8, cy - 5, 2);
     }
-    DrawCells("FIELD / 43 BAND", cl + 4, ct + 4, 2);
-    {
-        const char* tw = TransportWord();
-        DrawCells(tw, cr - 8 - (int)strlen(tw) * 8, ct + 4,
-                  g_state->current >= 0 && !g_state->libPaused ? 0 : 2);
-    }
-    // local file name under the display while a local track is active
-    if (g_state->current == kTrackCount && g_state->libCurrentRow >= 0 &&
-        g_state->libCurrentRow < g_libNameCount && g_libNames[g_state->libCurrentRow][0]) {
-        textLib(g_libNames[g_state->libCurrentRow], cl + 2, 441, cr - 2, 452, t.digit);
-    }
+    DrawCells("43 BAND", cl + 6, ct + 6, 2);
 
-    // right: full track list, two columns of 23. Three states: playing
-    // (blinking dot + bright text), selected (band + side marker), idle.
-    const int listX = 408, listY = 40, colW = 108, rowH = 17;
+    // ---- right: compact track index (x 460..628, 26% of the width) --------
+    InsetPanel(456, 34, 628, 446);
+    const int listX = 460, listY = 40, colW = 80, rowH = 16;
     const bool blink = (g_state->tick % 30) < 20;
     for (int i = 0; i < kTrackCount; ++i) {
         const int col = i / 23, row = i % 23;
@@ -815,19 +830,8 @@ void PaintStackLayout() {
         DrawCells(b, x + 8, y + 3, playing ? 0 : sel ? 0 : 2);
     }
 
-    // bottom rail: seek + time + hint (4px rail, bright playhead, pause blink)
-    FillRectCol(S(cl), S(451), S(cr), S(455), t.seam);
-    const int end = cl + int((cr - cl) * PlayProgress());
-    if (end > cl) FillRectCol(S(cl), S(451), S(end), S(455), t.bar);
-    if (g_state->current >= 0 && (!g_state->libPaused || blink))
-        FillRectCol(S(end - 1), S(449), S(end + 2), S(457),
-                    LerpCol(t.accentHot, t.ink, 0.25f));
-    {
-        char tb[32];
-        snprintf(tb, sizeof(tb), "TIME : %02dSEC", std::max(0, int(g_state->seconds)));
-        DrawCells(tb, 632 - (int)strlen(tb) * 8, 460, 3);
-    }
-    DrawCells("F7 VISUAL / F8 WING / F9 LAYOUT", cl, 460, 2);
+    PaintCustomHeader("STACK / 02");
+    PaintCustomFooter(false);
 }
 
 // ---- composition: circular instrument dial -------------------------------

@@ -334,9 +334,9 @@ function hitExit(x,y){return x>=156&&x<212&&y>=272&&y<288;}
 // Hit tests for the custom compositions (page 0). Returns a track index,
 // "exit", or null. Mirrors HandleLayoutMouse in the desktop shell.
 function hitLayout(x,y){
-  if(layoutMode===2){ // STACK: right-hand list, two columns of 23
-    if(x>=408&&x<624&&y>=40&&y<431){
-      const i=Math.floor((x-408)/108)*23+Math.floor((y-40)/17);
+  if(layoutMode===2){ // STACK: compact right index, two columns of 23
+    if(x>=460&&x<620&&y>=40&&y<408){
+      const i=Math.floor((x-460)/80)*23+Math.floor((y-40)/16);
       if(i>=0&&i<names.length)return i;
     }
     return null;
@@ -356,7 +356,9 @@ function hitLayout(x,y){
   return null; // FIELD / HELIX use the TAB grid / keyboard
 }
 // Progress rails of the custom layouts: [x0,x1,y0,y1] hit bands.
-const LAYOUT_SEEK={1:[24,616,432,446],2:[96,400,445,461],4:[348,452,346,362],6:[24,616,468,480]};
+// Shared chassis footer rail (y 454..457) for FIELD/STACK; CROSS/SINK/DIVE
+// keep their legacy bands until their own rebuild lands.
+const LAYOUT_SEEK={1:[16,624,448,462],2:[16,624,448,462],4:[348,452,346,362],6:[24,616,468,480]};
 function seekLayout(f){
   if(!buffer)return;
   offset=Math.max(0,Math.min(1,f))*buffer.duration;
