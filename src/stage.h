@@ -38,6 +38,13 @@ struct Memory {
     unsigned char histBeat[kHist]{};
     int histHead=0;
     double histLast=-1;
+    // Signed waveform sample per rung (-1..1): SINK projects this onto the
+    // strand's horizontal offset, so the wave itself draws the helix.
+    float histWaveL[kHist]{}, histWaveR[kHist]{};
+    // Running winding phase: advances with the signed wave (frequency sets
+    // the crossing rate, amplitude the swing), so the strands keep twisting
+    // even when a window mean cancels out.
+    float windL=0, windR=0;
     int head=0, trace=0, samples=0;
     double last=-1;
     double motion=-1;

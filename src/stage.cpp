@@ -73,13 +73,24 @@ void Memory::advance(const memoirs::Spectrum& s,int id,double seconds,bool playi
     }
 
     // HELIX / SINK: sample the per-channel drives into the rung history at
-    // 8 Hz; a fresh low attack marks the rung as a beat.
+    // 8 Hz; a fresh low attack marks the rung as a beat. Also keep a signed
+    // waveform sample (mean of a small window) for the SINK strand projection.
     if(histLast<0 || seconds-histLast>=1./8.){
         histLast=seconds;
         histHead=(histHead+1)%kHist;
         histL[histHead]=drive[0];
         histR[histHead]=drive[1];
         histBeat[histHead]=attack>0.30f?1:0;
+        float wl=0,wr=0;
+        for(int i=0;i<240;i+=8){wl+=s.waveL[i];wr+=s.waveR[i];}
+        // winding phase: the signed wave steers a continuous rotation, so a
+        // high tone winds fast, silence holds still, and the mean can never
+        // collapse the helix into a straight line
+        windL+=std::clamp(wl/30.f/64.f,-1.f,1.f)*2.4f+.35f;
+        windR+=std::clamp(wr/30.f/64.f,-1.f,1.f)*2.4f+.35f;
+        // antiphase pair: the two strands always cross into the # lattice
+        histWaveL[histHead]=std::sin(windL);
+        histWaveR[histHead]=-std::sin(windR);
     }
 
     if(last>=0 && seconds>=last && seconds-last<.045)return;

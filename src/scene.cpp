@@ -1116,14 +1116,12 @@ void PaintHelixLayout() {
     FillRectCol(0, 0, S(kLogicalW), S(kLogicalH), LerpCol(t.outer, t.panel, 0.40f));
 
     const bool active = g_state->current >= 0;
-    const float imp = Impact();
     const int H = stage::Memory::kHist;
 
     // shaft geometry
     const int wl = 210, wr = 430, wt = 56, wb = 440;
     const int cx = 320, pitch = 10, maxOff = 86;
-    const COLORREF wc = imp > 0.06f
-        ? LerpCol(t.frame, t.stripHot, std::min(1.f, imp * 1.3f)) : t.frame;
+    const COLORREF wc = t.frame;
     FillRectCol(S(wl - 14), S(wt), S(wr + 14), S(wb), LerpCol(t.panel, t.outer, 0.30f));
     FillRectCol(S(wl - 14), S(wt), S(wl - 13), S(wb), wc);
     FillRectCol(S(wr + 13), S(wt), S(wr + 14), S(wb), wc);
@@ -1152,20 +1150,23 @@ void PaintHelixLayout() {
         const int idx = (g_mem->histHead - row + H * 4) % H;
         return side ? g_mem->histR[idx] : g_mem->histL[idx];
     };
+    auto wave = [&](int row, int side) -> float {
+        if (!g_mem || row < 0 || row >= H) return 0.f;
+        const int idx = (g_mem->histHead - row + H * 4) % H;
+        return side ? g_mem->histWaveR[idx] : g_mem->histWaveL[idx];
+    };
     auto beat = [&](int row) -> bool {
         if (!g_mem || row < 0 || row >= H) return false;
         const int idx = (g_mem->histHead - row + H * 4) % H;
         return g_mem->histBeat[idx] != 0;
     };
-    // angular strand offset: triangle zigzag, period 8 rungs, channels in
-    // antiphase so the pair crosses twice per period (X / # lattice). The
-    // beat impact widens the whole lattice for a moment: the shaft flexes.
-    const float reach = maxOff + imp * 8.f;
-    auto strandX = [&](int n, int side, float drive) -> int {
-        const int m = ((n + (side ? 4 : 0)) % 8 + 8) % 8;
-        const float tri = m < 4 ? float(m) : float(8 - m);   // 0..4
-        const float u = tri * 0.5f - 1.f;                    // -1..+1
-        return cx + int(u * (16.f + drive * (reach - 16.f)));
+    // strand offset = the waveform sample itself, scaled by that moment's
+    // drive: the wave draws the helix, loud passages swing wide. No zigzag,
+    // no beat modulation - vertical motion is the only movement and it is
+    // strictly uniform.
+    auto strandX = [&](int row, int side) -> int {
+        const float drive = hist(row, side);
+        return cx + int(wave(row, side) * (18.f + drive * (maxOff - 18.f)));
     };
 
     gfx_push_clip(S(wl - 14), S(wt + 1), S(wr + 14), S(wb - 1));
@@ -1173,10 +1174,8 @@ void PaintHelixLayout() {
     for (int j = rows; j >= 0; --j) {
         const int y = wb - j * pitch + frac;
         if (y < wt - pitch || y > wb + pitch) continue;
-        const int n = base - j;                 // absolute sample index
         const int row = j;                      // history age (0 = newest)
-        const float dl = hist(row, 0), dr = hist(row, 1);
-        const int xl2 = strandX(n, 0, dl), xr2 = strandX(n, 1, dr);
+        const int xl2 = strandX(row, 0), xr2 = strandX(row, 1);
         const bool hot = beat(row);
         const bool fresh = row == 0;
         // cross pin between the strands: the # bars (1px, quiet)
@@ -1192,17 +1191,15 @@ void PaintHelixLayout() {
         FillRectCol(S(xl2 - 1), S(y - 1), S(xl2 + 2), S(y + 2), lc);
         FillRectCol(S(xr2 - 1), S(y - 1), S(xr2 + 2), S(y + 2), rc);
     }
-    // strand segments: straight 2px lines between consecutive nodes (sharp
-    // angles, no curves). Drawn after the pins so the strands read on top.
+    // strand segments between consecutive rung nodes, drawn after the pins
+    // so the strands read on top
     for (int j = rows; j >= 1; --j) {
         const int y0 = wb - j * pitch + frac, y1 = wb - (j - 1) * pitch + frac;
         if (y1 < wt - pitch || y0 > wb + pitch) continue;
-        const int n0 = base - j, n1 = n0 + 1;
         for (int side = 0; side < 2; ++side) {
-            const float d0 = hist(j, side), d1 = hist(j - 1, side);
             GfxPoint seg[2] = {
-                { (std::int16_t)S(strandX(n0, side, d0)), (std::int16_t)S(y0) },
-                { (std::int16_t)S(strandX(n1, side, d1)), (std::int16_t)S(y1) } };
+                { (std::int16_t)S(strandX(j, side)), (std::int16_t)S(y0) },
+                { (std::int16_t)S(strandX(j - 1, side)), (std::int16_t)S(y1) } };
             const COLORREF sc = side ? LerpCol(t.wave, t.bar, 0.45f) : t.wave;
             gfx_polyline(seg, 2, sc, 1);
         }
@@ -1278,26 +1275,26 @@ void PaintHelixLayout() {
 }
 
 // ---- composition: DIVE, first-person fall through a # / DNA tunnel --------
-// From the user's sketch: crossed frames are born at the centre dot, rotate
-// and grow toward the viewer, then leave past the screen edge. The newest
-// (farthest) frame is bright - the "next crossing" - and frames sink toward
-// the panel color as they pass. Corner rails between consecutive frames read
-// as the helix strands; their half-width is that moment's channel drive, so
-// the tunnel breathes with the music. A beat kicks the fall speed.
+// Each layer is a # frame whose four edges are DNA double helices: two
+// strands wind around each edge line with cross rungs between them. The
+// frame grows at a strictly uniform rate while the whole layer rotates; the
+// helix swing width is that moment's spectrum/waveform. Four bright marker
+// dots ride the edge midpoints so the plane reads in 3D. Frames are born
+// small at the centre, pass the viewer and leave past the screen edge.
 void PaintDiveLayout() {
     const Theme& t = Th();
     const float kPi = 3.14159265f;
     FillRectCol(0, 0, S(kLogicalW), S(kLogicalH), LerpCol(t.outer, t.panel, 0.55f));
 
     const bool active = g_state->current >= 0;
-    const float imp = Impact();
     const int cx = 320, cy = 240;
-    const int K = 6;                       // frames in flight at once
+    const int K = 3;                       // frames in flight: sparse, readable
     const int H = stage::Memory::kHist;
+    const int SEG = 28;                    // samples along each edge
 
-    // fall phase: one frame born every ~1.1 s, kicked forward by beats
-    const double rate = 0.9 + imp * 0.7;
-    const double f = active ? g_state->seconds * rate : 0.35;
+    // fall phase: strictly uniform - one frame born every ~2.2 s, constant
+    // growth and rotation. The music shapes the helix, never the motion.
+    const double f = active ? g_state->seconds * 0.45 : 0.35;
     const int base = int(std::floor(f));
     const float frac = float(f - base);
 
@@ -1306,68 +1303,79 @@ void PaintDiveLayout() {
         const int idx = (g_mem->histHead - age + H * 4) % H;
         return side ? g_mem->histR[idx] : g_mem->histL[idx];
     };
+    auto wave = [&](int age, int side) -> float {
+        if (!g_mem || age < 0 || age >= H) return 0.f;
+        const int idx = (g_mem->histHead - age + H * 4) % H;
+        return side ? g_mem->histWaveR[idx] : g_mem->histWaveL[idx];
+    };
 
-    struct Frame { int half; float ang; float u; int age; };
-    Frame fr[6];
+    struct Frame { float half; float ang; float u; int age; float drive; };
+    Frame fr[3];
     for (int k = 0; k < K; ++k) {
         const float u = (k + frac) / K;              // 0 new/far .. 1 old/near
-        const int age = base - k;                    // history sample index
-        const float drive = std::clamp((hist(age, 0) + hist(age, 1)) * 0.5f, 0.f, 1.f);
+        const int age = base - k;
         fr[k].u = u;
         fr[k].age = age;
-        fr[k].half = int(12.f + 430.f * u * u * (0.70f + 0.45f * drive));
-        fr[k].ang = age * 0.16f + (active ? float(g_state->seconds) * 0.06f : 0.f);
+        fr[k].half = 14.f + 470.f * u * u;           // uniform perspective growth
+        fr[k].drive = std::clamp((hist(age, 0) + hist(age, 1)) * 0.5f, 0.f, 1.f);
+        fr[k].ang = age * 0.35f + (active ? float(g_state->seconds) * 0.22f : 0.f);
     }
 
-    // corner rails first (under the frames): the DNA strands of the tunnel
-    for (int k = 0; k + 1 < K; ++k) {
-        for (int c = 0; c < 4; ++c) {
-            const float a0 = fr[k].ang + kPi / 4.f + c * kPi / 2.f;
-            const float a1 = fr[k + 1].ang + kPi / 4.f + c * kPi / 2.f;
-            const int r0 = int(fr[k].half * 1.4142f), r1 = int(fr[k + 1].half * 1.4142f);
-            GfxPoint seg[2] = {
-                { (std::int16_t)S(cx + int(r0 * cosf(a0))), (std::int16_t)S(cy + int(r0 * sinf(a0))) },
-                { (std::int16_t)S(cx + int(r1 * cosf(a1))), (std::int16_t)S(cy + int(r1 * sinf(a1))) } };
-            const float depth = fr[k].u;
-            gfx_polyline(seg, 2, LerpCol(t.wave, t.panel, 0.35f + depth * 0.5f), 1);
-        }
-    }
-
-    // the # frames, far (bright) to near (dim), painter's order
+    // painter's order: far (small, bright) first, near (large, dim) on top
     for (int k = 0; k < K; ++k) {
         const Frame& F = fr[k];
-        if (F.half > 560) continue;                  // fully past the viewer
+        if (F.half > 620.f) continue;                // fully past the viewer
         const float depth = F.u;
-        // newest frame = the bright "next crossing"; older sinks to panel
-        COLORREF col = depth < 0.2f ? t.bar
-                     : LerpCol(t.wave, t.panel, std::min(0.85f, 0.1f + depth * 0.85f));
-        if (depth < 0.2f && imp > 0.2f) col = LerpCol(t.bar, t.stripHot, imp);
-        const int w = depth < 0.35f ? 2 : depth < 0.7f ? 3 : 4;
+        const COLORREF strandA = depth < 0.22f ? t.bar
+            : LerpCol(t.wave, t.panel, std::min(0.8f, depth * 0.8f));
+        const COLORREF strandB = depth < 0.22f ? LerpCol(t.bar, t.wave, 0.4f)
+            : LerpCol(LerpCol(t.wave, t.bar, 0.45f), t.panel, std::min(0.8f, depth * 0.8f));
+        const COLORREF rungC = LerpCol(t.barLit, t.panel, std::min(0.7f, depth * 0.7f));
+        const int w = depth < 0.4f ? 1 : depth < 0.75f ? 2 : 3;
+        // helix swing: that moment's drive sets the width, the signed wave
+        // sample biases the winding phase so the shape follows the waveform
+        const float amp = F.half * (0.04f + 0.10f * F.drive);
+        const float bias = wave(F.age, 0) * 1.2f;
         const float ca = cosf(F.ang), sa = sinf(F.ang);
-        // two parallel bars per direction, offset +-half/3: the # shape
-        for (int dir = 0; dir < 2; ++dir) {
-            const float dx = dir ? -sa : ca, dy = dir ? ca : sa;   // bar direction
-            const float nx = -dy, ny = dx;                          // offset normal
-            for (int o = -1; o <= 1; o += 2) {
-                const float off = F.half * 0.34f * o;
-                const int bx = cx + int(nx * off), by = cy + int(ny * off);
-                GfxPoint seg[2] = {
-                    { (std::int16_t)S(bx - int(dx * F.half)), (std::int16_t)S(by - int(dy * F.half)) },
-                    { (std::int16_t)S(bx + int(dx * F.half)), (std::int16_t)S(by + int(dy * F.half)) } };
-                gfx_polyline(seg, 2, col, w);
+        auto pt = [&](float lx, float ly) -> GfxPoint {
+            return { (std::int16_t)S(cx + int(lx * ca - ly * sa)),
+                     (std::int16_t)S(cy + int(lx * sa + ly * ca)) };
+        };
+        // the four # edges: two horizontal at y=+-half/3, two vertical at
+        // x=+-half/3, each spanning +-half along its direction
+        const float off = F.half * 0.34f;
+        for (int e = 0; e < 4; ++e) {
+            const bool horiz = e < 2;
+            const float eo = (e % 2) ? off : -off;
+            // edge-local: p along the edge, q perpendicular (helix swing)
+            auto edgePt = [&](float p, float q) -> GfxPoint {
+                return horiz ? pt(p, eo + q) : pt(eo + q, p);
+            };
+            // cross rungs under the strands
+            for (int i = 0; i <= SEG; i += 4) {
+                const float p = -F.half + 2.f * F.half * i / SEG;
+                const float h = amp * sinf(2.f * kPi * 1.5f * i / SEG + bias + e * 0.7f);
+                GfxPoint seg[2] = { edgePt(p, h), edgePt(p, -h) };
+                gfx_polyline(seg, 2, rungC, 1);
             }
+            // the two strands winding around the edge line
+            GfxPoint sA[29], sB[29];
+            for (int i = 0; i <= SEG; ++i) {
+                const float p = -F.half + 2.f * F.half * i / SEG;
+                const float h = amp * sinf(2.f * kPi * 1.5f * i / SEG + bias + e * 0.7f);
+                sA[i] = edgePt(p, h);
+                sB[i] = edgePt(p, -h);
+            }
+            gfx_polyline(sA, SEG + 1, strandA, w);
+            gfx_polyline(sB, SEG + 1, strandB, w);
         }
-        // rung pins on the frame corners: small squares, hot on a beat
-        if (g_mem && F.age >= 0 && F.age < H) {
-            const int idx = (g_mem->histHead - F.age + H * 4) % H;
-            if (g_mem->histBeat[idx] && depth < 0.5f) {
-                for (int c = 0; c < 4; ++c) {
-                    const float a = F.ang + kPi / 4.f + c * kPi / 2.f;
-                    const int r = int(F.half * 1.4142f);
-                    const int x = cx + int(r * cosf(a)), y = cy + int(r * sinf(a));
-                    FillRectCol(S(x - 2), S(y - 2), S(x + 3), S(y + 3), t.stripHot);
-                }
-            }
+        // four bright plane markers at the edge midpoints
+        const COLORREF mark = depth < 0.5f ? t.stripHot : LerpCol(t.stripHot, t.panel, 0.4f);
+        const GfxPoint marks[4] = { pt(0, -off), pt(0, off), pt(-off, 0), pt(off, 0) };
+        for (int c = 0; c < 4; ++c) {
+            const int ms = depth < 0.5f ? 2 : 3;
+            FillRectCol(marks[c].x - ms, marks[c].y - ms,
+                        marks[c].x + ms + 1, marks[c].y + ms + 1, mark);
         }
     }
 
