@@ -72,6 +72,31 @@ struct Memory {
     double trackClock=0, trackLast=-1;
     // DECK: reel rotation phase (rad), uniform 2.2 rad/s while audible.
     double deckClock=0;
+    // POLY: uniform three-axis rotation phase.
+    double polyClock=0;
+    // WARP: terrain scroll clock (6 rows/s) plus the locked row-history ring.
+    double warpClock=0, warpLast=-1.0;
+    static constexpr int kWarpRows=16;
+    static constexpr int kWarpCols=24;
+    std::uint8_t warpRows[kWarpRows][kWarpCols]{};
+    int warpHead=0;
+    // MOIRE: uniform orbital phase of the three interference sources.
+    double moireClock=0;
+    // ---- audio modulation bus for the custom layouts -----------------------
+    // Mid band 6..27 (melody / FM lead) with its own floor and attack, so a
+    // phrase entry is distinguishable from a sustained pad.
+    float midSustain=0, midAttack=0, midFloor=0, lastMid=0;
+    // Stereo image (-1 left .. +1 right) and spectral centroid (0 dark .. 1
+    // bright): both drive 3D bending and orbit speed in the custom layouts.
+    float pan=0, centroid=0;
+    // RASTER / TORUS clocks (elastic, same standby rules as the others).
+    double rasterClock=0, torusClock=0;
+    // MOIRE shockwave radius, normalised: >= 1.2 means "no wave active".
+    float moirePulse=1.5f;
+    // DIVE depth-delay history: one quantised waveform per tunnel layer.
+    static constexpr int kDiveLayers=5;
+    std::int8_t diveWaves[kDiveLayers][240]{};
+    int diveWaveHead=0, diveLastLayer=-1;
     void advance(const memoirs::Spectrum&, int id, double seconds, bool playing, bool paused);
 };
 struct Palette { COLORREF field, grid, line, accent, frame; };

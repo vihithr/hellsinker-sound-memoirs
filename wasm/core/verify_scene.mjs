@@ -95,12 +95,12 @@ for (let stage = 1; stage <= 3; stage++) {
   fill({ stage });
   results.push({ stage, ...render() });
 }
-for (let layout = 1; layout <= 10; layout++) {
+for (let layout = 1; layout <= 14; layout++) {
   fill({ layout, showGridOverlay: layout === 1 || layout === 4 ? 1 : 0 });
   results.push({ layout, ...render() });
 }
 // Custom layouts across all five palettes.
-for (let layout = 1; layout <= 10; layout++) {
+for (let layout = 1; layout <= 14; layout++) {
   for (let theme = 0; theme < 5; theme++) {
     fill({ layout, theme });
     results.push({ layout, theme, ...render() });

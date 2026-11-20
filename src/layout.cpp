@@ -34,7 +34,11 @@ const wchar_t* const kNames[Count][3] = {
     { L"Sono", L"声谱瀑布", L"ソノグラム" },
     { L"Track", L"八轨卷帘", L"トラッカー" },
     { L"Deck", L"磁带卡座", L"カセットデッキ" },
-    { L"Sonar", L"扇扫声呐", L"扇形ソナー" },
+    { L"Poly", L"线框晶核", L"多面体" },
+    { L"Warp", L"曲速地形", L"ワープ" },
+    { L"Moire", L"莫尔干涉", L"モアレ" },
+    { L"Raster", L"光栅铜条", L"ラスター" },
+    { L"Torus", L"矢量环面", L"トーラス" },
 };
 
 } // namespace

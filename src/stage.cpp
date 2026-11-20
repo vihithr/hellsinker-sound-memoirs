@@ -44,20 +44,38 @@ float calibratedMeter(float env,const float* wave){
 void Memory::advance(const memoirs::Spectrum& s,int id,double seconds,bool playing,bool paused){
     // standby-aware animation clocks survive resets (freeze, never jump);
     // histClock/sonoLast/trackLast keep their phase so resume never tears
-    struct Clocks { double sink,dive,sono,track,deck,hist,sonoL,trackL; };
+    struct Clocks { double sink,dive,sono,track,deck,poly,warp,warpL,moire,raster,torus,hist,sonoL,trackL; };
     const Clocks keep{sinkClock,diveClock,sonoClock,trackClock,deckClock,
+                      polyClock,warpClock,warpLast,moireClock,rasterClock,torusClock,
                       histClock,sonoLast,trackLast};
     auto restore=[&](const Clocks& c){
         sinkClock=c.sink; diveClock=c.dive; sonoClock=c.sono;
         trackClock=c.track; deckClock=c.deck;
+        polyClock=c.poly; warpClock=c.warp; warpLast=c.warpL; moireClock=c.moire;
+        rasterClock=c.raster; torusClock=c.torus;
         histClock=c.hist; sonoLast=c.sonoL; trackLast=c.trackL;
     };
     if(id!=track || (playing && motion>=0 && (seconds+.10<motion || seconds-motion>1.0))){
         *this=Memory{}; track=id; restore(keep);
     }
     if(!playing){
-        // standby lock: keep the frozen scene and clocks, zero the energy
-        *this=Memory{}; track=id; restore(keep);
+        // Standby is no longer a hard reset: the energy fields decay smoothly
+        // (~0.25 s) while the frozen picture, its history buffers and every
+        // clock stay exactly where they were.
+        const float decay=float(std::exp(-(1.f/60.f)/0.16f));
+        auto warm=[&](float& v){ v*=decay; if(std::abs(v)<0.002f)v=0.f; };
+        warm(lowSustain); warm(impact); warm(lowFloor); warm(lastLow);
+        warm(midSustain); warm(midAttack); warm(midFloor); warm(lastMid);
+        warm(highSpark); warm(highFloor); warm(lastHigh);
+        warm(pan); warm(centroid);
+        warm(wing[0]); warm(wing[1]);
+        warm(meter[0]); warm(meter[1]);
+        warm(coilAttack[0]); warm(coilAttack[1]);
+        warm(meterPeak[0]); warm(meterPeak[1]);
+        warm(correlation);
+        for(int c=0;c<2;c++)clipHold[c]=std::max(0.f,clipHold[c]-1.f/60.f);
+        moirePulse=1.5f;
+        motion=-1; sameSecFrames=0; clockComp=0;
         return;
     }
     if(paused)return;
@@ -81,12 +99,8 @@ void Memory::advance(const memoirs::Spectrum& s,int id,double seconds,bool playi
         motion=seconds;
     }
     dt=std::clamp(dt,.001f,.12f);
-    sinkClock+=dt*8.0;    // 8 rungs/s at 10px = uniform 80px/s descent
-    diveClock+=dt*0.32;   // one tunnel layer born every 1/0.32 s
-    sonoClock+=dt*15.0;   // SONO waterfall prints 15 rows/s
-    trackClock+=dt*12.0;  // TRACK pattern scrolls 12 rows/s
-    deckClock+=dt*2.2;    // DECK reels spin at a uniform 2.2 rad/s
 
+    // ---- band features first: the elastic clocks consume them ---------------
     float low=0;
     for(int i=0;i<6;++i)low+=std::clamp(s.barsLevel[i]/96.f,0.f,1.f);
     low/=6.f;
@@ -95,6 +109,18 @@ void Memory::advance(const memoirs::Spectrum& s,int id,double seconds,bool playi
     const float attack=std::max(0.f,low-lowFloor)*1.55f+std::max(0.f,low-lastLow)*.85f;
     impact=follow(impact,std::clamp(attack,0.f,1.f),dt,.022,.24);
     lastLow=low;
+
+    // Mid band 6..27: melody / FM lead. Own floor + attack so a phrase entry
+    // reads differently from a sustained pad.
+    float mid=0;
+    for(int i=6;i<=27;++i)mid+=std::clamp(s.barsLevel[i]/96.f,0.f,1.f);
+    mid/=22.f;
+    midFloor=follow(midFloor,mid,dt,.16,.90);
+    midSustain=follow(midSustain,mid,dt,.045,.45);
+    const float mAttack=std::max(0.f,mid-midFloor)*1.60f+std::max(0.f,mid-lastMid)*0.90f;
+    midAttack=follow(midAttack,std::clamp(mAttack,0.f,1.f),dt,.018,.18);
+    lastMid=mid;
+
     float high=0;
     for(int i=28;i<=42;++i)high+=std::clamp(s.barsLevel[i]/96.f,0.f,1.f);
     high/=15.f;
@@ -102,6 +128,45 @@ void Memory::advance(const memoirs::Spectrum& s,int id,double seconds,bool playi
     const float hAttack=std::max(0.f,high-highFloor)*1.8f+std::max(0.f,high-lastHigh)*1.0f;
     highSpark=follow(highSpark,std::clamp(hAttack,0.f,1.f),dt,.015,.14);
     lastHigh=high;
+
+    // Spectral centroid: 0 = weighty/dark, 1 = bright. Feeds the MOIRE orbit.
+    {
+        float num=0.f,den=0.f;
+        for(int k=0;k<43;++k){
+            const float w=bandLevel(s.barsLevel[k]);
+            num+=float(k)*w; den+=w;
+        }
+        const float cTarget=den>1e-4f?(num/(42.f*den)):0.f;
+        centroid=follow(centroid,std::clamp(cTarget,0.f,1.f),dt,.08,.35);
+    }
+
+    // ---- elastic clocks: speed follows the music, phase never jumps --------
+    sinkClock+=dt*(6.5+3.5*lowSustain+5.0*impact);
+    diveClock+=dt*(0.26+0.24*lowSustain+0.55*impact);
+    sonoClock+=dt*15.0;   // SONO waterfall prints 15 rows/s
+    trackClock+=dt*12.0;  // TRACK pattern scrolls 12 rows/s
+    deckClock+=dt*2.2;    // DECK reels spin at 2.2 rad/s
+    polyClock+=dt*(0.70+0.65*midSustain+1.35*impact);
+    warpClock+=dt*(4.5+4.5*lowSustain+7.5*impact);
+    moireClock+=dt*(0.65+0.55*midSustain+0.45*centroid);
+    rasterClock+=dt*(1.6+1.2*midSustain+2.0*impact);
+    torusClock+=dt*(0.85+0.70*midSustain+1.20*impact);
+    // WARP row history: lock-phase stepping. One row per clock unit, at most
+    // eight catch-up rows after a long frame; warpLast keeps the phase so the
+    // sub-row offset in the painter never rebounds.
+    if(warpLast<0.0)warpLast=std::floor(warpClock);
+    for(int guard=0;warpClock-warpLast>=1.0&&guard<8;++guard){
+        warpLast+=1.0;
+        for(int c=0;c<kWarpCols;++c){
+            const int b0=c*43/kWarpCols;
+            const int b1=std::min(42,(c+1)*43/kWarpCols);
+            float m=0.f;
+            for(int k=b0;k<=b1;++k)m=std::max(m,bandLevel(s.barsLevel[k]));
+            warpRows[warpHead][c]=std::uint8_t(std::clamp(m,0.f,1.f)*255.f);
+        }
+        warpHead=(warpHead+1)%kWarpRows;
+    }
+
     wing[0]=follow(wing[0],channelDrive(s.envL,s.waveL),dt,.030,.30);
     wing[1]=follow(wing[1],channelDrive(s.envR,s.waveR),dt,.030,.30);
     const float input[2] = {calibratedMeter(s.envL,s.waveL), calibratedMeter(s.envR,s.waveR)};
@@ -109,6 +174,11 @@ void Memory::advance(const memoirs::Spectrum& s,int id,double seconds,bool playi
         const float onset = std::clamp(4.f * (input[side] - meter[side]), 0.f, 1.f);
         coilAttack[side] = follow(coilAttack[side], onset, dt, .012, .21);
         meter[side] = follow(meter[side], input[side], dt, .025, .26);
+    }
+    // Stereo image from the calibrated meters: -1 hard left .. +1 hard right.
+    {
+        const float panTarget=(meter[1]-meter[0])/(meter[0]+meter[1]+0.08f);
+        pan=follow(pan,std::clamp(panTarget,-1.f,1.f),dt,.06,.22);
     }
 
     // XY auto-gain: follow the live trace peak, attack 120 ms / release 1.6 s.
@@ -150,6 +220,24 @@ void Memory::advance(const memoirs::Spectrum& s,int id,double seconds,bool playi
         else{
             meterAge[c]++;
             if(meterAge[c]>48)meterPeak[c]=std::max(meter[c],meterPeak[c]-0.55f*dt);
+        }
+    }
+
+    // MOIRE shockwave: retrigger on a hit, otherwise expand and fade out.
+    if(impact>0.18f && moirePulse>0.45f)moirePulse=0.f;
+    else if(moirePulse<1.25f)moirePulse+=dt*(0.95f+0.8f*lowSustain);
+
+    // DIVE depth delay: one quantised waveform snapshot per tunnel layer.
+    {
+        const int curLayer=int(std::floor(diveClock));
+        if(curLayer!=diveLastLayer){
+            diveLastLayer=curLayer;
+            diveWaveHead=(diveWaveHead+1)%kDiveLayers;
+            for(int i=0;i<240;++i){
+                const int c=i/30;
+                const float v=(c%2)?s.waveR[i]:s.waveL[i];
+                diveWaves[diveWaveHead][i]=std::int8_t(std::clamp(v/56.f,-1.f,1.f)*127.f);
+            }
         }
     }
 

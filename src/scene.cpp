@@ -26,6 +26,27 @@ using std::max;
 
 namespace {
 
+// ---- unit-circle lookup tables --------------------------------------------
+// Hot loops (moire rings, 64 segments per ring) must not call cosf/sinf per
+// vertex. Two fixed resolutions cover every caller; the 32-point table is
+// enough for small radii, where adjacent samples already land on the same
+// pixel.
+template <int N>
+struct UnitCircleLut {
+    float c[N + 1];
+    float s[N + 1];
+    UnitCircleLut() {
+        constexpr float kTwoPi = 6.283185307179586f;
+        for (int i = 0; i <= N; ++i) {
+            const float a = kTwoPi * i / float(N);
+            c[i] = std::cos(a);
+            s[i] = std::sin(a);
+        }
+    }
+};
+static const UnitCircleLut<64> kCircle64;
+static const UnitCircleLut<32> kCircle32;
+
 // ---- logical screen geometry (as in the former ui.cpp) -------------------
 const int kLogicalW = scene::kLogicalWidth;
 const int kLogicalH = scene::kLogicalHeight;
@@ -176,6 +197,7 @@ void panelBox(int x, int y, int r, int b, COLORREF c) {
 // On light themes CustomPanelCol/CustomFrameCol pull the two apart so the
 // window reads as a real recess instead of a flat wash.
 static void InsetPanel(int x, int y, int r, int b) {
+    const Theme& t = Th();
     const COLORREF panel = CustomPanelCol();
     const COLORREF frame = LerpCol(CustomFrameCol(), panel, 0.32f);
     FillRectCol(S(x), S(y), S(r), S(b), panel);
@@ -183,6 +205,156 @@ static void InsetPanel(int x, int y, int r, int b) {
     FillRectCol(S(x), S(b - 1), S(r), S(b), frame);
     FillRectCol(S(x), S(y), S(x + 1), S(b), frame);
     FillRectCol(S(r - 1), S(y), S(r), S(b), frame);
+    // 1px physical inner fold: the glass sits *inside* the metal chamfer.
+    const COLORREF innerShade = LightTheme()
+        ? LerpCol(panel, t.ink, 0.12f)
+        : LerpCol(panel, RGB(0, 0, 0), 0.35f);
+    FillRectCol(S(x + 1), S(y + 1), S(r - 1), S(y + 2), innerShade);
+    FillRectCol(S(x + 1), S(y + 1), S(x + 2), S(b - 1), innerShade);
+}
+
+// Four L-shaped registration corners inside a recessed window. Single source
+// of truth for the chassis marks: every caller paints the same eight arms, so
+// a layout can no longer drop three corners through a hand-rolled loop.
+static void PaintCornerBrackets(int l, int t, int r, int b, int arm) {
+    const COLORREF fc = CustomFrameCol();
+    panelBox(l, t, l + arm, t + 1, fc);         panelBox(l, t, l + 1, t + arm, fc);
+    panelBox(r - arm, t, r, t + 1, fc);         panelBox(r - 1, t, r, t + arm, fc);
+    panelBox(l, b - 1, l + arm, b, fc);         panelBox(l, b - arm, l + 1, b, fc);
+    panelBox(r - arm, b - 1, r, b, fc);         panelBox(r - 1, b - arm, r, b, fc);
+}
+
+// ---- handheld-scope hardware: graticule + telemetry bay -------------------
+static void DrawCellsTL(const char* text, int x, int y, int palette);
+// The custom 3D layouts share one instrument chassis: a left scope window
+// (16..524) with a printed graticule, and a right telemetry bay (532..624).
+// Signal motion is mapped onto sliding cursors on the rails instead of moving
+// the whole body, which is what kept the old versions looking like screensavers.
+static void PaintScopeGraticule(int l, int t, int r, int b,
+                                bool drawCross, bool showPan, bool showCent) {
+    const Theme& th = Th();
+    const int cx = (l + r) / 2, cy = (t + b) / 2;
+    const COLORREF tickC = LerpCol(CustomFrameCol(), CustomPanelCol(), 0.35f);
+    const COLORREF axisC = LerpCol(CustomFrameCol(), CustomPanelCol(), 0.58f);
+
+    // four-sided scale: 3px tick every 12px, 6px major every 48px
+    for (int x = l + 12, i = 1; x < r - 8; x += 12, ++i) {
+        const int len = (i % 4 == 0) ? 6 : 3;
+        FillRectCol(S(x), S(t + 1), S(x + 1), S(t + 1 + len), tickC);
+        FillRectCol(S(x), S(b - 1 - len), S(x + 1), S(b - 1), tickC);
+    }
+    for (int y = t + 12, i = 1; y < b - 8; y += 12, ++i) {
+        const int len = (i % 4 == 0) ? 6 : 3;
+        FillRectCol(S(l + 1), S(y), S(l + 1 + len), S(y + 1), tickC);
+        FillRectCol(S(r - 1 - len), S(y), S(r - 1), S(y + 1), tickC);
+    }
+
+    // optional faint crosshair, 14px clear at the centre
+    if (drawCross) {
+        FillRectCol(S(l + 10), S(cy), S(cx - 7), S(cy + 1), axisC);
+        FillRectCol(S(cx + 8), S(cy), S(r - 10), S(cy + 1), axisC);
+        FillRectCol(S(cx), S(t + 10), S(cx + 1), S(cy - 7), axisC);
+        FillRectCol(S(cx), S(cy + 8), S(cx + 1), S(b - 10), axisC);
+    }
+
+    // top-edge PAN cursor (stereo image)
+    if (showPan && g_mem) {
+        const int px = cx + int(std::clamp(g_mem->pan, -1.f, 1.f) * float((r - l) / 2 - 28));
+        const COLORREF pc = std::abs(g_mem->pan) > 0.28f ? th.accentHot : th.bar;
+        FillRectCol(S(px - 4), S(t + 1), S(px + 5), S(t + 4), pc);
+        FillRectCol(S(px), S(t + 4), S(px + 1), S(t + 8), pc);
+    }
+
+    // right-edge CENT cursor (spectral centroid: low at the bottom)
+    if (showCent && g_mem) {
+        const float cent = std::clamp(g_mem->centroid, 0.f, 1.f);
+        const int py = (b - 14) - int(cent * float((b - t) - 28));
+        FillRectCol(S(r - 4), S(py - 3), S(r - 1), S(py + 4), th.bar);
+        FillRectCol(S(r - 8), S(py), S(r - 4), S(py + 1), th.bar);
+    }
+
+    PaintCornerBrackets(l + 6, t + 6, r - 6, b - 6, 8);
+}
+
+// Right-hand telemetry bay: four strictly separated zones, no overlapping
+// text or rules. Shared by every handheld-scope layout so the chassis reads
+// as one product line.
+static void PaintScopeTelemetryBay(const char* modeTag, const char* subTag) {
+    const Theme& t = Th();
+    const int bx = 532, br = 624;
+    InsetPanel(bx, 34, br, 446);
+    const COLORREF sep = LerpCol(CustomFrameCol(), CustomPanelCol(), 0.45f);
+
+    // Zone 1 (y 40..84): mode code + TRIG latch lamp
+    DrawCellsTL(modeTag, bx + 6, 40, 2);
+    DrawCellsTL(subTag, bx + 6, 54, 3);
+    const bool trig = Impact() > 0.08f;
+    FillRectCol(S(bx + 6), S(70), S(bx + 12), S(76), CustomFrameCol());
+    FillRectCol(S(bx + 7), S(71), S(bx + 11), S(75), trig ? t.accentHot : t.seam);
+    DrawCellsTL("TRIG", bx + 16, 68, trig ? 0 : 2);
+    FillRectCol(S(bx + 4), S(84), S(br - 4), S(85), sep);
+
+    // Zone 2 (y 90..284): L/R meters with CLIP lamps and peak holds
+    const int mBot = 266;  // 28 cells x 6px = 168px (y 98..266)
+    for (int side = 0; side < 2; ++side) {
+        const int x = side ? 588 : 548;
+        const bool clip = g_mem && g_mem->clipHold[side] > 0.f;
+        FillRectCol(S(x + 4), S(90), S(x + 10), S(96), CustomFrameCol());
+        FillRectCol(S(x + 5), S(91), S(x + 9), S(95), clip ? t.accentHot : t.seam);
+        const float drive = g_mem ? g_mem->meter[side] : 0.f;
+        const int n = std::clamp(int(drive * 28.f), 0, 28);
+        for (int i = 0; i < n; ++i) {
+            const int y = mBot - i * 6;
+            FillRectCol(S(x), S(y - 4), S(x + 14), S(y),
+                        i > 21 ? t.accentHot : CustomStripCol());
+        }
+        for (int i = n; i < 28; i += 4) {
+            const int y = mBot - i * 6;
+            FillRectCol(S(x + 4), S(y - 1), S(x + 10), S(y),
+                        LerpCol(t.seam, CustomPanelCol(), 0.35f));
+        }
+        if (g_mem && g_mem->meterPeak[side] > 0.02f) {
+            const int py = mBot - int(g_mem->meterPeak[side] * 168.f);
+            FillRectCol(S(x), S(py - 2), S(x + 14), S(py), t.accentHot);
+        }
+        DrawCellsTL(side ? "R" : "L", x + 3, 270, 2);
+    }
+    // centre-gap dB reference ticks
+    for (int i = 0; i < 4; ++i) {
+        const int y = 104 + i * 48;
+        FillRectCol(S(568), S(y), S(582), S(y + 1), sep);
+    }
+    FillRectCol(S(bx + 4), S(286), S(br - 4), S(287), sep);
+
+    // Zone 3 (y 292..354): LOW / MID / HI bars
+    const float bands[3] = {
+        g_mem ? g_mem->lowSustain : 0.f,
+        g_mem ? g_mem->midSustain : 0.f,
+        g_mem ? g_mem->highSpark : 0.f
+    };
+    static const char* bTag[3] = { "LO", "MD", "HI" };
+    for (int i = 0; i < 3; ++i) {
+        const int y = 294 + i * 20;
+        DrawCellsTL(bTag[i], bx + 6, y, 2);
+        FillRectCol(S(bx + 28), S(y + 2), S(br - 6), S(y + 8), t.seam);
+        const int w = int(std::clamp(bands[i], 0.f, 1.f) * float((br - 6) - (bx + 28)));
+        if (w > 0) FillRectCol(S(bx + 28), S(y + 2), S(bx + 28 + w), S(y + 8),
+                               i == 0 ? t.bar : i == 1 ? t.wave : t.accentHot);
+    }
+    FillRectCol(S(bx + 4), S(356), S(br - 4), S(357), sep);
+
+    // Zone 4 (y 362..442): numeric telemetry
+    char buf[16];
+    const int corr = g_mem ? int(g_mem->correlation * 99.f) : 0;
+    snprintf(buf, sizeof(buf), "COR%c%02d", corr < 0 ? '-' : '+', std::abs(corr));
+    DrawCellsTL(buf, bx + 6, 364, 3);
+    const int panV = g_mem ? int(g_mem->pan * 99.f) : 0;
+    snprintf(buf, sizeof(buf), "PAN%c%02d", panV < 0 ? '-' : '+', std::abs(panV));
+    DrawCellsTL(buf, bx + 6, 382, 3);
+    const int cenV = g_mem ? int(g_mem->centroid * 99.f) : 0;
+    snprintf(buf, sizeof(buf), "CEN:%02d", cenV);
+    DrawCellsTL(buf, bx + 6, 400, 2);
+    DrawCellsTL(PlaybackOrderWord(), bx + 6, 424, 2);
 }
 
 // ---- Unicode text helpers (SYS / LIB shell pages) -------------------------
@@ -375,6 +547,39 @@ void PaintCustomFooter(bool showGridHint) {
         snprintf(tb, sizeof(tb), "%02d:%02d", secs / 60, secs % 60);
         DrawCellsTL(tb, 616 - (int)strlen(tb) * 8, 460, 3);
     }
+}
+
+// ---- reversing spec plate + layout-switch calibration sweep ---------------
+// A solid plate with inverted text is the loudest quiet element available:
+// one per layout is enough to anchor the hierarchy.
+static void PaintSpecPlate(int x, int y, const char* text, bool hot = false) {
+    const Theme& t = Th();
+    const int w = (int)std::strlen(text) * 8 + 10;
+    const COLORREF bg = hot ? t.accentHot
+                            : LerpCol(CustomFrameCol(), CustomPanelCol(), 0.25f);
+    FillRectCol(S(x), S(y), S(x + w), S(y + 13), bg);
+    FillRectCol(S(x), S(y), S(x + 3), S(y + 13), hot ? t.ink : t.bar);
+    DrawCellsTL(text, x + 6, y + 1, hot ? 1 : 0);
+}
+
+int g_lastCustomLayout = -1;
+unsigned g_layoutSwitchTick = 0;
+
+// Ten-frame horizontal calibration line on every custom-layout change; the
+// plate flashes for the first six frames. Deliberately outside the standby
+// clocks: it is a UI acknowledgement, not music.
+static void PaintLayoutSwitchSweep() {
+    if (!g_state) return;
+    if (g_state->layoutMode != g_lastCustomLayout) {
+        g_lastCustomLayout = g_state->layoutMode;
+        g_layoutSwitchTick = g_state->tick;
+    }
+    const unsigned age = g_state->tick - g_layoutSwitchTick;
+    if (age >= 10) return;
+    const Theme& t = Th();
+    const int y = 34 + int(age) * 41;
+    FillRectCol(S(16), S(y), S(624), S(y + 2), t.bar);
+    if (age < 6) PaintSpecPlate(24, 38, "CAL // LOCK", age < 2);
 }
 
 // ---- painting ------------------------------------------------------------
@@ -700,20 +905,7 @@ void PaintFieldLayout() {
 
     // main display window: the single visual protagonist of this layout
     InsetPanel(16, 34, 624, 446);
-    // chassis registration corners inside the window
-    {
-        const COLORREF fc = CustomFrameCol();
-        for (int cx2 : { 22, 618 }) {
-            const int dir = cx2 < 320 ? 1 : -1;
-            for (int cy2 : { 40, 440 }) {
-                const int vdir = cy2 < 240 ? 1 : -1;
-                panelBox(std::min(cx2, cx2 + dir * 10), cy2,
-                         std::max(cx2, cx2 + dir * 10) + 1, cy2 + 1, fc);
-                panelBox(cx2, std::min(cy2, cy2 + vdir * 10),
-                         cx2 + 1, std::max(cy2, cy2 + vdir * 10) + 1, fc);
-            }
-        }
-    }
+    PaintCornerBrackets(22, 40, 618, 440, 10);
 
     // ---- upper spectrum field (y 44..316): 43 flat two-tone columns -------
     const int baseY = 316;
@@ -746,8 +938,8 @@ void PaintFieldLayout() {
     profile[cols] = { profile[cols-1].x, (std::int16_t)S(baseY) };
     profile[cols+1] = { profile[0].x, (std::int16_t)S(baseY) };
     gfx_polygon(profile, cols+2, body);
-    gfx_polyline(peaks, cols, LerpCol(t.bar, CustomPanelCol(), .5f), S(1));
-    gfx_polyline(profile, cols, t.wave, S(2));
+    gfx_polyline(peaks, cols, LerpCol(t.wave, CustomPanelCol(), 0.35f), S(1));
+    gfx_polyline(profile, cols, t.bar, S(2));
     // beat: the baseline steps 1px -> 3px solid accent; HF spark lights the
     // frequency ticks below (three-band division of labour)
     if (imp > 0.08f)
@@ -862,15 +1054,7 @@ void PaintStackLayout() {
             FillRectCol(S(x + 1), S(53), S(x + 5), S(57), hot ? t.accentHot : t.seam);
         }
         // chassis micro-corners inside the bay
-        const COLORREF fc = CustomFrameCol();
-        for (int cx2 : { 16, 64 }) {
-            const int dir = cx2 < 40 ? 1 : -1;
-            for (int cy2 : { 66, 442 }) {
-                const int vdir = cy2 < 240 ? 1 : -1;
-                FillRectCol(S(cx2), S(cy2), S(cx2 + dir * 6), S(cy2 + (vdir > 0 ? 1 : 0)), fc);
-                FillRectCol(S(cx2), S(cy2), S(cx2 + (dir > 0 ? 1 : 0)), S(cy2 + vdir * 6), fc);
-            }
-        }
+        PaintCornerBrackets(16, 66, 64, 442, 6);
     }
 
     // ---- centre display: the protagonist (x 76..452, 376px wide) ----------
@@ -1267,7 +1451,7 @@ void PaintCrossLayout() {
         }
         gfx_polyline(xy, 120, t.bar, 1);
         FillRectCol(S(mx - 1), S(my - 1), S(mx + 2), S(my + 2), t.frame);
-        DrawCells("XY PHASE", wx + 6, wy + 6, 2);
+        DrawCellsTL("XY PHASE", wx + 6, wy + 5, 2);
         if (spark > 0.2f)
             FillRectCol(S(wr - 10), S(wy + 6), S(wr - 6), S(wy + 10), t.accentHot);
     }
@@ -1298,15 +1482,15 @@ void PaintCrossLayout() {
     // ---- bottom-right: spacious transport bay ------------------------------
     {
         const int px = 432;
-        DrawCells(TransportWord(), px, 306, g_state->current >= 0 && !g_state->libPaused ? 0 : 2);
+        DrawCellsTL(TransportWord(), px, 304, g_state->current >= 0 && !g_state->libPaused ? 0 : 2);
         {
             char b[24];
             snprintf(b, sizeof(b), "%s", g_state->current < 0 ? "--" : "LOCAL");
             if (g_state->current >= 0 && g_state->current < kTrackCount) snprintf(b, sizeof(b), "TR:%02d", g_state->current);
-            DrawCells(b, px, 326, g_state->current >= 0 ? 0 : 2);
-            DrawCells(PlaybackOrderWord(), px + 72, 326, 2);
+            DrawCellsTL(b, px, 322, g_state->current >= 0 ? 0 : 2);
+            DrawCellsTL(PlaybackOrderWord(), px + 72, 322, 2);
         }
-        DrawCells("EXIT", px, 348, g_state->selected == kExitIndex ? 1 : 2);
+        DrawCellsTL("EXIT", px, 344, g_state->selected == kExitIndex ? 1 : 2);
         // stereo phase correlation meter (real telemetry, centre-out cursor)
         PaintCorrelationBar(px + 34, 378, 96);
         // horizontal L/R level bars with hard peak-hold ticks + CLIP lamps
@@ -1320,7 +1504,7 @@ void PaintCrossLayout() {
                 const int pxx = px + 24 + int(g_mem->meterPeak[side] * 120.f);
                 FillRectCol(S(pxx), S(y - 2), S(pxx + 2), S(y + 8), t.accentHot);
             }
-            DrawCells(side ? "R" : "L", px, y - 2, 2);
+            DrawCellsTL(side ? "R" : "L", px, y - 2, 2);
             PaintClipLed(584, y, side);
         }
     }
@@ -1425,12 +1609,27 @@ void PaintHelixLayout() {
     struct CoilPoint { float x, y, z; };
     auto coil = [&](float y, int side, int strand) -> CoilPoint {
         const float hand = side ? 1.f : -1.f;
-        const float meter = g_mem ? g_mem->meter[side] : 0.f;
+        // Depth-delayed envelope: a drum hit enters at the mouth of the shaft
+        // and slides down the coil instead of swelling the whole strand at
+        // once. 25% live meter keeps the head responsive.
+        float waveEnv = g_mem ? g_mem->meter[side] : 0.f;
+        if (g_mem) {
+            const float uY = std::clamp((y - wt) / float(wb - wt), 0.f, 1.f);
+            const int delay = std::clamp(int(uY * 36.f), 0, stage::Memory::kHist - 1);
+            const int idx = (g_mem->histHead - delay + stage::Memory::kHist * 4)
+                            % stage::Memory::kHist;
+            const float histVal = side ? g_mem->histR[idx] : g_mem->histL[idx];
+            waveEnv = 0.25f * g_mem->meter[side] + 0.75f * histVal;
+        }
         const double turn = (y-wt)*.049 + side*.8 + clock*(side ? -.17 : .20) + strand*3.14159265;
-        const float radius = 27.f + 8.f*meter;
+        const float radius = 24.f + 15.f*waveEnv;
         const double yaw = std::fmod(clock*.16, 6.283185307179586);
-        const float orbitX = 54.f*float(std::cos(yaw));
-        const float orbitZ = 54.f*float(std::sin(yaw));
+        // Stereo width: a decorrelated mix opens the two shafts apart, a mono
+        // mix keeps them tight.
+        const float corr = g_mem ? g_mem->correlation : 0.f;
+        const float orbitR = 46.f + 14.f * (1.f - std::clamp(corr, -1.f, 1.f)) * 0.5f;
+        const float orbitX = orbitR*float(std::cos(yaw));
+        const float orbitZ = orbitR*float(std::sin(yaw));
         const float x = hand*orbitX + radius*float(std::sin(turn));
         const float depth = hand*orbitZ + radius*float(std::cos(turn));
         return {cx + x, y + .12f*depth, depth/96.f};
@@ -1491,12 +1690,12 @@ void PaintHelixLayout() {
     // ---- left bay: depth gauge + compact L meter (x 24..156) --------------
     {
         const int gx = 96, gt = 76, gb = 400;
-        DrawCells("DEPTH", 62, 44, 2);
-        FillRectCol(S(gx), S(gt), S(gx + 1), S(gb), LerpCol(t.frame, t.outer, 0.25f));
+        DrawCellsTL("DEPTH", 62, 42, 2);
+        FillRectCol(S(gx), S(gt), S(gx + 1), S(gb), LerpCol(CustomFrameCol(), t.outer, 0.25f));
         for (int i = 0; i <= 10; ++i) {
             const int y = gt + i * (gb - gt) / 10;
             FillRectCol(S(gx - (i % 5 == 0 ? 8 : 4)), S(y), S(gx), S(y + 1),
-                        LerpCol(t.frame, t.outer, 0.30f));
+                        LerpCol(CustomFrameCol(), t.outer, 0.30f));
         }
         // stepped cursor block: 14x7 with a hot top edge
         const int my = gt + int(PlayProgress() * (gb - gt));
@@ -1504,7 +1703,7 @@ void PaintHelixLayout() {
         FillRectCol(S(gx - 10), S(my - 3), S(gx + 4), S(my - 1), t.accentHot);
         char db[24];
         snprintf(db, sizeof(db), "-%04dM", int(PlayProgress() * 9999));
-        DrawCells(db, 56, 414, 3);
+        DrawCellsTL(db, 54, 412, 3);
         // compact L channel meter beside the gauge
         const int mx = 126, mBot = 400;
         const float drive = g_mem ? g_mem->meter[0] : 0.f;
@@ -1517,7 +1716,7 @@ void PaintHelixLayout() {
             const int py = mBot - int(g_mem->meterPeak[0] * 320.f);
             FillRectCol(S(mx), S(py - 2), S(mx + 12), S(py), t.accentHot);
         }
-        DrawCells("L", mx + 2, 410, 2);
+        DrawCellsTL("L", mx + 2, 408, 2);
     }
 
     // ---- right bay: R meter + LOW ladder + order (x 484..616) -------------
@@ -1533,9 +1732,9 @@ void PaintHelixLayout() {
             const int py = mBot - int(g_mem->meterPeak[1] * 320.f);
             FillRectCol(S(mx), S(py - 2), S(mx + 12), S(py), t.accentHot);
         }
-        DrawCells("R", mx + 2, 410, 2);
+        DrawCellsTL("R", mx + 2, 408, 2);
         const int lx = 514, ly = 96;
-        DrawCells("LOW", lx, 82, 2);
+        DrawCellsTL("LOW", lx, 78, 2);
         for (int k = 0; k < 8; ++k) {
             const int y = ly + k * 10;
             const int w = int(Lv(k) * 100);
@@ -1543,7 +1742,7 @@ void PaintHelixLayout() {
             const int pw = int(stage::bandLevel(g_state->spectrum.barsPrev[k]) * 100);
             if (pw > w) FillRectCol(S(lx + w), S(y), S(lx + pw), S(y + 4), t.barLit);
         }
-        DrawCells(PlaybackOrderWord(), lx, 200, 2);
+        DrawCellsTL(PlaybackOrderWord(), lx, 196, 2);
     }
 
     PaintCustomHeader("SINK / 05");
@@ -1554,13 +1753,16 @@ void PaintDiveLayout() {
     const Theme& t = Th();
     const float kPi = 3.14159265f;
     FillRectCol(0, 0, S(kLogicalW), S(kLogicalH), t.outer);
-    // the tunnel lives on a recessed panel between the chassis bars, so
-    // DepthInk's fade target (panel) IS the actual backdrop
-    InsetPanel(0, 28, kLogicalW, 452);
-    gfx_push_clip(S(1), S(29), S(kLogicalW - 1), S(451));
+    // the tunnel lives inside the left scope window only; the right bay is
+    // the shared telemetry column
+    InsetPanel(16, 34, 524, 446);
+    gfx_push_clip(S(17), S(35), S(523), S(445));
 
     const bool active = g_state->current >= 0 && !g_state->libPaused;
-    const int cx = 320, cy = 240;
+    // Vanishing point is locked to the scope centre; the stereo image moves it
+    // by at most +-6px instead of swinging the whole body.
+    const float pan = g_mem ? g_mem->pan : 0.f;
+    const int cx = 270 + int(pan * 6.f), cy = 240;
     const int K = 5;                       // layers in flight: full mid-field
 
     // fall phase: strictly uniform on the standby-aware dive clock - one
@@ -1602,8 +1804,13 @@ void PaintDiveLayout() {
             const float ox = cx + dist * size * cosf(theta);
             const float oy = cy + dist * size * sinf(theta);
             if (ox < -260.f || ox > 900.f || oy < -260.f || oy > 740.f) continue;
-            const float s = std::min(120.f, size * 0.30f);     // solid half-size
-            const COLORREF oc = DepthInk(t.wave, 0.35f + 0.55f * (1.f - uObj));
+            const float bandE = Lv((i * 4 + 2) % 43);
+            const float s = std::min(130.f, size * (0.28f + 0.14f * bandE));  // solid half-size
+            // Calibration targets, not floating debris: quiet solids sink into
+            // the frame ink; only a hot band lights a solid vermilion.
+            const COLORREF oc = bandE > 0.72f
+                                    ? DepthInk(t.accentHot, 0.20f + 0.45f * (1.f - uObj))
+                                    : DepthInk(CustomFrameCol(), 0.45f + 0.45f * (1.f - uObj));
             // back face shrinks toward the vanishing point (0.78x)
             auto P = [&](float dx, float dy, float shrink) -> GfxPoint {
                 const float px = cx + (ox - cx + dx) * shrink;
@@ -1648,35 +1855,20 @@ void PaintDiveLayout() {
     }
 
     // ---- live corridor edges: each layer's 8 vertices connect to the next
-    // layer's corresponding vertex (incl. the recycled anchor) as running
-    // scopes - odd vertices carry the L wave, even the R, displaced
-    // perpendicular to the edge, so the walkway walls dance with the music.
+    // layer's corresponding vertex (incl. the recycled anchor) as clean
+    // two-point struts. The wave work stays on the 240-point inner ring, so
+    // the corridor reads as straight architecture instead of a squiggle.
     for (int k = 0; k + 1 <= K; ++k) {
         const Frame& A = fr[k];
         const Frame& B = fr[k + 1];
-        const float depth = std::min(1.f, A.u);
-        const float fade = std::pow(1.f - depth, 1.35f);
+        const float fade = std::pow(1.f - std::min(1.f, A.u), 1.35f);
+        const COLORREF ec = DepthInk(CustomFrameCol(), 0.25f + 0.55f * fade);
         for (int c = 0; c < 8; ++c) {
             const float aa = kPi / 8.f + c * kPi / 4.f;
-            const float ax = A.half * cosf(aa + A.ang), ay = A.half * sinf(aa + A.ang);
-            const float bx = B.half * cosf(aa + B.ang), by = B.half * sinf(aa + B.ang);
-            const float dx = bx - ax, dy = by - ay;
-            const float len = std::sqrt(dx * dx + dy * dy);
-            if (len < 2.f) continue;
-            const float nx = -dy / len, ny = dx / len;
-            const float* wv = (c % 2) ? g_state->spectrum.waveL : g_state->spectrum.waveR;
-            const COLORREF ec = DepthInk((c % 2) ? t.wave : LerpCol(t.wave, t.bar, 0.45f),
-                                         0.20f + 0.60f * fade);
-            const int RS = 16;
-            GfxPoint rail[17];
-            for (int i = 0; i <= RS; ++i) {
-                const float tt = float(i) / RS;
-                const float v = std::clamp(wv[(i * 14) % 240] / 64.f, -1.f, 1.f);
-                const float disp = v * std::min(14.f, len * 0.10f);
-                rail[i] = { (std::int16_t)S(cx + int(ax + dx * tt + nx * disp)),
-                            (std::int16_t)S(cy + int(ay + dy * tt + ny * disp)) };
-            }
-            gfx_polyline(rail, RS + 1, ec, S(1));
+            GfxPoint seg[2] = {
+                ScenePoint(cx + A.half * cosf(aa + A.ang), cy + A.half * sinf(aa + A.ang)),
+                ScenePoint(cx + B.half * cosf(aa + B.ang), cy + B.half * sinf(aa + B.ang)) };
+            gfx_polyline(seg, 2, ec, S(1));
         }
     }
 
@@ -1711,12 +1903,22 @@ void PaintDiveLayout() {
         // A single luminous scope trace follows the eight faces. Each
         // vertex samples signed PCM so it travels to either side of its rail.
         if (F.half >= 34.f) {
+            // Depth delay: only the nearest layer reads the live PCM; the
+            // layers behind it replay the quantised snapshot of their own age,
+            // so the waveform visibly recedes down the tunnel.
+            int hIdx = -1;
+            if (g_mem && k != nearK) {
+                const int ageSlot = std::clamp(nearK - k, 1, stage::Memory::kDiveLayers - 1);
+                hIdx = (g_mem->diveWaveHead - ageSlot + stage::Memory::kDiveLayers * 4)
+                       % stage::Memory::kDiveLayers;
+            }
             GfxPoint trace[241];
             for (int i=0; i<240; ++i) {
                 const int c=i/30, next=(c+1)%8;
                 const float u=(i%30)/30.f;
                 const float* wave=c%2 ? g_state->spectrum.waveR : g_state->spectrum.waveL;
-                const float sample=std::clamp(wave[i]/56.f,-1.f,1.f);
+                float sample=std::clamp(wave[i]/56.f,-1.f,1.f);
+                if (hIdx >= 0) sample=float(g_mem->diveWaves[hIdx][i])/127.f;
                 const float offset=.135f*sample*std::abs(sample);
                 const float radius= .90f-offset;
                 trace[i]=pt((ovx[c]+(ovx[next]-ovx[c])*u)*radius,
@@ -1752,9 +1954,23 @@ void PaintDiveLayout() {
         }
     }
 
+    // fixed optical aiming ring: a hard reference circle that never moves
+    {
+        const COLORREF ac = LerpCol(CustomFrameCol(), CustomPanelCol(), 0.45f);
+        GfxPoint aim[33];
+        for (int i = 0; i <= 32; ++i)
+            aim[i] = ScenePoint(270.f + 42.f * kCircle32.c[i],
+                                240.f + 42.f * kCircle32.s[i]);
+        gfx_polyline(aim, 33, ac, S(1));
+    }
+    PaintScopeGraticule(16, 34, 524, 446, true, true, true);
+    PaintSpecPlate(24, 42, "OPTIC // 5-GATE", Impact() > 0.18f);
+
     gfx_pop_clip();
+    PaintScopeTelemetryBay("DIVE", "OPT-06");
     PaintCustomHeader("DIVE / 06");
     PaintCustomFooter(false);
+    PaintLayoutSwitchSweep();
 }
 
 // ---- composition: SONO, SDR-style spectrogram waterfall --------------------
@@ -2014,84 +2230,8 @@ static void Draw7Seg(int x, int y, int digit, COLORREF lit, COLORREF unlit) {
 // compact VFD spectrum. Reels spin on the standby-aware deck clock.
 // Polar scan memory: bearing encodes time within the sweep and range
 // encodes frequency. Echoes come from the existing 15 Hz spectrum history.
-void PaintSonarLayout() {
-    const Theme& t=Th();
-    FillRectCol(0,0,S(640),S(480),t.outer);
-    InsetPanel(12,34,628,446);
-    auto polar=[](float angle,float radius) {
-        return ScenePoint(320.f+radius*std::sin(angle),405.f-radius*std::cos(angle));
-    };
-    constexpr int bearings=72;
-    auto angle=[](float slot){return -1.14f+2.28f*slot/71.f;};
-    // Range grid: restrained hairlines, with a slightly stronger outer gate.
-    for(int ring=1;ring<=5;++ring){
-        GfxPoint arc[bearings];
-        for(int j=0;j<bearings;++j) arc[j]=polar(angle(float(j)),ring*63.f);
-        gfx_polyline(arc,bearings,ring==5?LerpCol(t.frame,t.panel,.48f)
-                                             :LerpCol(t.frame,t.panel,.72f),S(1));
-    }
-    for(int spoke=0;spoke<=8;++spoke){
-        const float a=angle(spoke*71.f/8);
-        GfxPoint line[]={polar(a,18),polar(a,315)};
-        gfx_polyline(line,2,LerpCol(t.frame,t.panel,.78f),S(1));
-    }
-    // Bearing ticks live outside the active field, so they never compete
-    // with the echo marks.
-    for(int tick=0;tick<=24;++tick){
-        const float a=angle(tick*71.f/24);
-        const float inner=tick%6==0?305.f:310.f;
-        GfxPoint mark[]={polar(a,inner),polar(a,315)};
-        gfx_polyline(mark,2,LerpCol(t.panel,t.frame,tick%6==0?.75f:.38f),S(1));
-    }
-    const double time=g_mem?g_mem->sonoClock:0.;
-    const int now=int(std::floor(time));
-    // Each retained spectrum snapshot is a narrow radial contact band. Drawing
-    // oldest -> newest preserves the recent sweep as the brightest layer.
-    if(g_mem) for(int age=bearings-1;age>=0;--age){
-        const int bearing=(now-age+bearings)%bearings;
-        const int slot=(g_mem->sonoHead-1-age+stage::Memory::kSonoRows)%stage::Memory::kSonoRows;
-        const float life=1.f-float(age)/float(bearings);
-        const float a=angle(float(bearing));
-        for(int k=0;k<43;++k){
-            const float energy=g_mem->sono[slot][k]/255.f;
-            if(energy<.10f)continue;
-            const float r=24.f+6.8f*k;
-            const float half=.009f+.017f*energy;
-            GfxPoint echo[]={polar(a-half,r),polar(a+half,r)};
-            const COLORREF base=energy>.78f?t.accentHot:energy>.46f?t.bar:t.wave;
-            const float gain=life*(.16f+.84f*energy);
-            gfx_polyline(echo,2,LerpCol(t.panel,base,gain),S(energy>.72f?2:1));
-            if(energy>.82f&&age<18){
-                GfxPoint needle[]={polar(a,r-3.f),polar(a,r+4.f)};
-                gfx_polyline(needle,2,LerpCol(t.panel,t.accentHot,gain*.82f),S(1));
-            }
-        }
-    }
-    const int sweepSlot=int(std::fmod(time,double(bearings)));
-    // Short retained beam trail plus one hot leading edge.
-    for(int trail=7;trail>=1;--trail){
-        const float a=angle(float((sweepSlot-trail+bearings)%bearings));
-        GfxPoint beam[]={polar(a,16),polar(a,315)};
-        gfx_polyline(beam,2,LerpCol(t.panel,t.bar,.035f*(8-trail)),S(1));
-    }
-    const float sweep=angle(std::min(71.f,float(sweepSlot)));
-    GfxPoint beam[]={polar(sweep,12),polar(sweep,315)};
-    gfx_polyline(beam,2,LerpCol(t.bar,t.accentHot,.34f),S(1));
-    GfxPoint head[]={polar(sweep,305),polar(sweep,315)};
-    gfx_polyline(head,2,t.accentHot,S(2));
-    {
-        GfxPoint hub[]={polar(-1.14f,10),polar(1.14f,10)};
-        gfx_polyline(hub,2,LerpCol(t.frame,t.panel,.35f),S(1));
-        FillRectCol(S(318),S(402),S(322),S(408),t.accentHot);
-    }
-    char bearingText[16];
-    snprintf(bearingText,sizeof(bearingText),"BRG:%03d",sweepSlot*5);
-    DrawCellsTL("LOW",301,416,2);
-    DrawCellsTL("HIGH",301,68,2);
-    DrawCellsTL(bearingText,532,416,2);
-    PaintCustomHeader("SONAR / 10");
-    PaintCustomFooter(false);
-}
+// Full-circle radar: a rotating sweep with a fading afterglow sector, range
+// rings, and contacts painted as radial arcs around the whole compass.
 
 void PaintDeckLayout() {
     const Theme& t = Th();
@@ -2104,17 +2244,7 @@ void PaintDeckLayout() {
     // ---- military data-recorder bay ------------------------------------------
     InsetPanel(16, 34, 624, 240);
     // registration corners on the bay
-    {
-        const COLORREF fc = CustomFrameCol();
-        for (int cx2 : { 22, 618 }) {
-            const int dir = cx2 < 320 ? 1 : -1;
-            for (int cy2 : { 40, 234 }) {
-                const int vdir = cy2 < 137 ? 1 : -1;
-                FillRectCol(S(cx2), S(cy2), S(cx2 + dir * 10), S(cy2 + (vdir > 0 ? 1 : 0)), fc);
-                FillRectCol(S(cx2), S(cy2), S(cx2 + (dir > 0 ? 1 : 0)), S(cy2 + vdir * 10), fc);
-            }
-        }
-    }
+    PaintCornerBrackets(22, 40, 618, 234, 10);
     const int ly = 134, lx = 166, rx = 474;
     const int rL = 52 - int(20 * p), rR = 32 + int(20 * p);
     const COLORREF tape = LerpCol(CustomPanelCol(), t.ink, 0.22f);
@@ -2200,7 +2330,7 @@ void PaintDeckLayout() {
     }
     // ---- VFD timecode window ------------------------------------------------
     InsetPanel(244, 66, 396, 206);
-    DrawCellsTL("MEMOIRS // UNIT-09", 252, 74, 2);
+    DrawCellsTL("MEMOIRS // 09", 268, 74, 2);
     {
         const int secs = std::max(0, int(g_state->seconds));
         const int mm = (secs / 60) % 100, ss = secs % 60;
@@ -2217,7 +2347,7 @@ void PaintDeckLayout() {
     FillRectCol(S(252), S(136), S(388), S(137), LerpCol(CustomFrameCol(), CustomPanelCol(), 0.4f));
     {
         const bool rec = g_state->current >= 0 && !g_state->libPaused;
-        DrawCellsTL("PLAY", 252, 140, rec ? 0 : 2);
+        DrawCellsTL("LOCK", 252, 140, rec ? 0 : 2);
         FillRectCol(S(322), S(142), S(326), S(146), rec ? t.accentHot : t.seam);
         DrawCellsTL("SYNC", 344, 140, g_mem && g_mem->impact > 0.08f ? 0 : 2);
     }
@@ -2285,6 +2415,963 @@ void PaintDeckLayout() {
     PaintCustomHeader("DECK / 09");
     PaintCustomFooter(false);
 }
+
+// ---- composition: POLY, 3D wireframe icosahedron core ----------------------
+// A 12-vertex icosahedron (30 edges) wraps a counter-rotating octahedron
+// (6 vertices, 12 edges) above a minimal perspective floor. All 42 edges are
+// depth-sorted with the painter's algorithm, so near struts occlude far ones.
+// Two previous frames of projected vertices are kept as a phosphor ghost: the
+// buffer lives here (not in stage::Memory) because the painter only ever sees
+// a const Memory snapshot.
+namespace {
+struct PolyGhostBuf {
+    GfxPoint pts[2][18]{};
+    int count = 0;
+    int lastTrack = -2;
+};
+PolyGhostBuf g_polyGhost;
+} // namespace
+
+void PaintPolyLayout() {
+    const Theme& t = Th();
+    FillRectCol(0, 0, S(kLogicalW), S(kLogicalH), t.outer);
+
+    if (g_state->current != g_polyGhost.lastTrack) {
+        g_polyGhost.count = 0;
+        g_polyGhost.lastTrack = g_state->current;
+    }
+
+    const float imp = Impact();
+    const float lowS = g_mem ? g_mem->lowSustain : 0.f;
+    const float midS = g_mem ? g_mem->midSustain : 0.f;
+    const float spark = g_mem ? g_mem->highSpark : 0.f;
+    const double clk = g_mem ? g_mem->polyClock : 0.0;
+
+    // ---- left main window: 3D perspective core ---------------------------
+    InsetPanel(16, 34, 412, 446);
+    gfx_push_clip(S(17), S(35), S(411), S(445));
+
+    // perspective floor: six rows roll toward the camera on the left channel
+    {
+        const COLORREF gridC = LerpCol(CustomPanelCol(), t.seam, 0.55f);
+        const float floorPhase = float(std::fmod(clk * 0.55, 1.0));
+        for (int i = 0; i <= 5; ++i) {
+            const float u = std::clamp((i + floorPhase) / 6.f, 0.f, 1.f);
+            const int y = 352 + int(90.f * std::pow(u, 1.7f));
+            const int xl = 104 - int(74.f * u), xr = 324 + int(74.f * u);
+            GfxPoint fpts[17];
+            for (int k = 0; k <= 16; ++k) {
+                const float tx = k / 16.f;
+                const float disp = std::clamp(g_state->spectrum.waveL[k * 14] / 64.f,
+                                              -1.f, 1.f);
+                fpts[k] = ScenePoint(xl + (xr - xl) * tx, y + disp * (1.0f + 2.2f * u));
+            }
+            gfx_polyline(fpts, 17, gridC, S(1));
+        }
+        for (int k = 0; k <= 8; ++k) {
+            const float u = k / 8.f;
+            GfxPoint seg[2] = { ScenePoint(104.f + 220.f * u, 352.f),
+                                ScenePoint(40.f + 344.f * u, 442.f) };
+            gfx_polyline(seg, 2, gridC, S(1));
+        }
+    }
+
+    // ---- locked geometry: 12-vertex icosahedron, 6-vertex octahedron ------
+    constexpr float phi = 1.61803398875f;
+    constexpr float inv = 0.525731112f;           // 1 / sqrt(1 + phi^2)
+    constexpr float piv = phi * inv;              // 0.850650808
+    static constexpr float V[12][3] = {
+        { -inv, piv, 0.f },   { inv, piv, 0.f },
+        { -inv, -piv, 0.f },  { inv, -piv, 0.f },
+        { 0.f, -inv, piv },   { 0.f, inv, piv },
+        { 0.f, -inv, -piv },  { 0.f, inv, -piv },
+        { piv, 0.f, -inv },   { piv, 0.f, inv },
+        { -piv, 0.f, -inv },  { -piv, 0.f, inv } };
+    static constexpr int E[30][2] = {
+        { 0, 11 }, { 0, 5 }, { 0, 1 }, { 0, 7 }, { 0, 10 },
+        { 1, 5 }, { 5, 11 }, { 11, 10 }, { 10, 7 }, { 7, 1 },
+        { 3, 9 }, { 3, 4 }, { 3, 2 }, { 3, 6 }, { 3, 8 },
+        { 4, 9 }, { 2, 4 }, { 6, 2 }, { 8, 6 }, { 9, 8 },
+        { 4, 5 }, { 9, 5 }, { 9, 1 }, { 8, 1 }, { 8, 7 },
+        { 6, 7 }, { 6, 10 }, { 2, 10 }, { 2, 11 }, { 4, 11 } };
+    static constexpr float IV[6][3] = {
+        { 1.f, 0.f, 0.f }, { -1.f, 0.f, 0.f },
+        { 0.f, 1.f, 0.f }, { 0.f, -1.f, 0.f },
+        { 0.f, 0.f, 1.f }, { 0.f, 0.f, -1.f } };
+    static constexpr int IE[12][2] = {
+        { 0, 2 }, { 0, 3 }, { 0, 4 }, { 0, 5 },
+        { 1, 2 }, { 1, 3 }, { 1, 4 }, { 1, 5 },
+        { 2, 4 }, { 2, 5 }, { 3, 4 }, { 3, 5 } };
+
+    const float fcx = 214.f, fcy = 222.f, fov = 330.f;
+    const float camZ = 3.85f - 0.14f * imp;
+    const float ax = float(clk * 0.62), ay = float(clk * 0.91), az = float(clk * 0.27);
+    const float inScale = 0.42f + 0.16f * lowS + 0.12f * imp;
+
+    float ox[18], oy[18], oz[18];
+    float rx3[18], rz2[18];   // rotated world coords, reused by the top view
+    auto put = [&](int idx, float vx, float vy, float vz,
+                   float rx, float ry, float rz) {
+        const float c1 = cosf(rx), s1 = sinf(rx);
+        const float y1 = vy * c1 - vz * s1;
+        const float z1 = vy * s1 + vz * c1;
+        const float c2 = cosf(ry), s2 = sinf(ry);
+        const float x2 = vx * c2 + z1 * s2;
+        const float z2 = -vx * s2 + z1 * c2;
+        const float c3 = cosf(rz), s3 = sinf(rz);
+        const float x3 = x2 * c3 - y1 * s3;
+        const float y3 = x2 * s3 + y1 * c3;
+        const float d = fov / (camZ - z2);
+        ox[idx] = fcx + x3 * d;
+        oy[idx] = fcy - y3 * d;
+        oz[idx] = z2;
+        rx3[idx] = x3;
+        rz2[idx] = z2;
+    };
+    for (int i = 0; i < 12; ++i) {
+        const float rad = 1.f + 0.52f * Lv(i * 3 + 2);
+        put(i, V[i][0] * rad, V[i][1] * rad, V[i][2] * rad, ax, ay, az);
+    }
+    for (int i = 0; i < 6; ++i) {
+        put(12 + i, IV[i][0] * inScale, IV[i][1] * inScale, IV[i][2] * inScale,
+            -ax * 1.25f, -ay * 1.15f, -az);
+    }
+
+    int hotIdx = -1;
+    float hotE = 0.f;
+    for (int i = 0; i < 12; ++i) {
+        const float e = Lv(i * 3 + 2);
+        if (e > hotE) { hotE = e; hotIdx = i; }
+    }
+
+    struct Edge { float za, zb; int a, b; bool inner; };
+    Edge edges[42];
+    int ne = 0;
+    for (int i = 0; i < 30; ++i)
+        edges[ne++] = { oz[E[i][0]], oz[E[i][1]], E[i][0], E[i][1], false };
+    for (int i = 0; i < 12; ++i)
+        edges[ne++] = { oz[12 + IE[i][0]], oz[12 + IE[i][1]],
+                        12 + IE[i][0], 12 + IE[i][1], true };
+    std::sort(edges, edges + ne, [](const Edge& a, const Edge& b) {
+        return a.za + a.zb < b.za + b.zb;
+    });
+
+    GfxPoint gp[18];
+    for (int i = 0; i < 18; ++i) gp[i] = ScenePoint(ox[i], oy[i]);
+
+    if (g_polyGhost.count > 0) {
+        const int g = g_polyGhost.count - 1;
+        const COLORREF gc = DepthInk(t.wave, 0.72f);
+        for (int i = 0; i < 30; ++i) {
+            GfxPoint seg[2] = { g_polyGhost.pts[g][E[i][0]],
+                                g_polyGhost.pts[g][E[i][1]] };
+            gfx_polyline(seg, 2, gc, S(1));
+        }
+    }
+
+    for (int i = 0; i < ne; ++i) {
+        const Edge& e = edges[i];
+        const float zNorm = std::clamp((0.5f * (e.za + e.zb) + 1.4f) / 2.8f, 0.f, 1.f);
+        COLORREF ec;
+        int w;
+        if (!e.inner) {
+            if (zNorm < 0.48f) {
+                ec = DepthInk(t.wave, 0.55f);
+                w = S(1);
+            } else {
+                ec = DepthInk(t.bar, 0.35f * (1.f - zNorm));
+                w = zNorm > 0.72f ? S(2) : S(1);
+            }
+        } else {
+            ec = DepthInk(CustomFrameCol(), 0.55f * (1.f - zNorm));
+            w = S(1);
+        }
+        GfxPoint seg[2] = { gp[e.a], gp[e.b] };
+        gfx_polyline(seg, 2, ec, w);
+    }
+
+    // hard-edge vertex nodes
+    {
+        int near3[3] = { -1, -1, -1 };
+        for (int i = 0; i < 12; ++i) {
+            for (int s = 0; s < 3; ++s) {
+                if (near3[s] < 0 || oz[i] > oz[near3[s]]) {
+                    for (int q = 2; q > s; --q) near3[q] = near3[q - 1];
+                    near3[s] = i;
+                    break;
+                }
+            }
+        }
+        for (int i = 0; i < 12; ++i) {
+            if (Lv(i * 3 + 2) <= 0.62f && spark <= 0.25f) continue;
+            bool isNear = false;
+            for (int s = 0; s < 3; ++s) isNear = isNear || near3[s] == i;
+            const int size = (imp > 0.08f && isNear) ? 4 : 3;
+            const int half = size / 2;
+            FillRectCol(gp[i].x - S(half), gp[i].y - S(half),
+                        gp[i].x - S(half) + S(size), gp[i].y - S(half) + S(size),
+                        t.accentHot);
+        }
+    }
+
+    if (spark > 0.22f) {
+        int t0 = -1, t1 = -1;
+        float e0 = -1.f, e1 = -1.f;
+        for (int i = 0; i < 12; ++i) {
+            const float e = Lv(i * 3 + 2);
+            if (e > e0) { e1 = e0; t1 = t0; e0 = e; t0 = i; }
+            else if (e > e1) { e1 = e; t1 = i; }
+        }
+        for (int s = 0; s < 2; ++s) {
+            const int v = s ? t1 : t0;
+            if (v < 0) continue;
+            GfxPoint seg[2] = { gp[v], gp[12 + (v % 6)] };
+            gfx_polyline(seg, 2, t.accentHot, S(1));
+        }
+    }
+
+    // ---- dynamic peak target lock + 45-degree engineering leader ----------
+    if (hotIdx >= 0 && hotE > 0.25f) {
+        const int r = S(4);
+        const int hx = gp[hotIdx].x, hy = gp[hotIdx].y;
+        FillRectCol(hx - r, hy - r, hx + r + S(1), hy - r + S(1), t.accentHot);
+        FillRectCol(hx - r, hy + r, hx + r + S(1), hy + r + S(1), t.accentHot);
+        FillRectCol(hx - r, hy - r, hx - r + S(1), hy + r + S(1), t.accentHot);
+        FillRectCol(hx + r, hy - r, hx + r + S(1), hy + r + S(1), t.accentHot);
+        const int dir = (ox[hotIdx] < fcx) ? -1 : 1;
+        GfxPoint lead[3] = {
+            gp[hotIdx],
+            ScenePoint(ox[hotIdx] + dir * 22.f, oy[hotIdx] - 22.f),
+            ScenePoint(ox[hotIdx] + dir * 82.f, oy[hotIdx] - 22.f) };
+        gfx_polyline(lead, 3, t.accentHot, S(1));
+        char tag[16];
+        snprintf(tag, sizeof(tag), "B%02d/%02d", hotIdx * 3 + 2, int(hotE * 99.f));
+        int tx = int(ox[hotIdx] + dir * 82.f) - (dir < 0 ? 56 : 0);
+        tx = std::clamp(tx, 20, 340);
+        DrawCellsTL(tag, tx, int(oy[hotIdx]) - 34, 3);
+    }
+
+    if (g_state->current >= 0 && !g_state->libPaused) {
+        if (g_polyGhost.count >= 1)
+            for (int i = 0; i < 18; ++i) g_polyGhost.pts[0][i] = g_polyGhost.pts[1][i];
+        for (int i = 0; i < 18; ++i) g_polyGhost.pts[1][i] = gp[i];
+        if (g_polyGhost.count == 0)
+            for (int i = 0; i < 18; ++i) g_polyGhost.pts[0][i] = gp[i];
+        g_polyGhost.count = std::min(2, g_polyGhost.count + 1);
+    }
+
+    PaintScopeGraticule(16, 34, 412, 446, true, true, false);
+    PaintSpecPlate(24, 42, "CAD // 12V-30E");
+    gfx_pop_clip();
+
+    // ---- top-right window: 2D orthographic XZ projection ------------------
+    InsetPanel(420, 34, 624, 242);
+    gfx_push_clip(S(421), S(35), S(623), S(241));
+    {
+        const int mx = 522, my = 144;
+        const COLORREF gc = LerpCol(CustomFrameCol(), CustomPanelCol(), 0.55f);
+        FillRectCol(S(mx - 64), S(my), S(mx + 64), S(my + 1), gc);
+        FillRectCol(S(mx), S(my - 64), S(mx + 1), S(my + 64), gc);
+        GfxPoint circ[33];
+        for (int i = 0; i <= 32; ++i)
+            circ[i] = ScenePoint(mx + 64.f * kCircle32.c[i],
+                                 my - 64.f * kCircle32.s[i]);
+        gfx_polyline(circ, 33, DepthInk(t.seam, 0.35f), S(1));
+
+        GfxPoint top[12];
+        for (int i = 0; i < 12; ++i)
+            top[i] = ScenePoint(mx + rx3[i] * 42.f, my - rz2[i] * 42.f);
+        for (int i = 0; i < 30; ++i) {
+            GfxPoint seg[2] = { top[E[i][0]], top[E[i][1]] };
+            gfx_polyline(seg, 2, DepthInk(t.wave, 0.28f), S(1));
+        }
+        if (hotIdx >= 0 && hotE > 0.25f) {
+            const int hx = top[hotIdx].x, hy = top[hotIdx].y;
+            FillRectCol(hx - S(2), hy - S(2), hx + S(3), hy + S(3), t.accentHot);
+        }
+        DrawCellsTL("TOP // XZ PROJ", 428, 42, 2);
+        char b[32];
+        snprintf(b, sizeof(b), "YAW:%03d PCH:%03d",
+                 int(std::fmod(double(ay) * 57.2958, 360.0)),
+                 int(std::fmod(double(ax) * 57.2958, 360.0)));
+        DrawCellsTL(b, 428, 222, 2);
+    }
+    gfx_pop_clip();
+
+    // ---- bottom-right window: three-band decision bay ---------------------
+    InsetPanel(420, 250, 624, 446);
+    {
+        const float bands[3] = { lowS, midS, spark };
+        static const char* nm[3] = { "01:SUB", "02:MID", "03:AIR" };
+        for (int i = 0; i < 3; ++i) {
+            const int y = 260 + i * 44;
+            const bool act = bands[i] > 0.62f || (i == 0 && imp > 0.16f);
+            const COLORREF bg = act ? (i == 1 ? t.bar : t.accentHot) : CustomPanelCol();
+            FillRectCol(S(428), S(y), S(616), S(y + 36), bg);
+            if (!act) {
+                FillRectCol(S(428), S(y), S(616), S(y + 1), CustomFrameCol());
+                FillRectCol(S(428), S(y + 35), S(616), S(y + 36), CustomFrameCol());
+                FillRectCol(S(428), S(y), S(429), S(y + 36), CustomFrameCol());
+                FillRectCol(S(615), S(y), S(616), S(y + 36), CustomFrameCol());
+            }
+            DrawCellsTL(nm[i], 436, y + 5, act ? 0 : 2);
+            DrawCellsTL(act ? "SYNC" : "NORM", 576, y + 5, act ? 0 : 2);
+            const int w = int(std::clamp(bands[i], 0.f, 1.f) * 172.f);
+            if (w > 0)
+                FillRectCol(S(436), S(y + 30), S(436 + w), S(y + 33),
+                            act ? t.ink : t.bar);
+        }
+        for (int side = 0; side < 2; ++side) {
+            const int y = 402 + side * 12;
+            const float drive = g_mem ? g_mem->meter[side] : 0.f;
+            DrawCellsTL(side ? "R" : "L", 424, y - 2, 2);
+            FillRectCol(S(436), S(y), S(564), S(y + 7),
+                        LerpCol(t.seam, CustomPanelCol(), 0.30f));
+            const int w = int(std::clamp(drive, 0.f, 1.f) * 128.f);
+            if (w > 0) FillRectCol(S(436), S(y), S(436 + w), S(y + 7), CustomStripCol());
+            if (g_mem && g_mem->meterPeak[side] > 0.02f) {
+                const int px = 436 + int(g_mem->meterPeak[side] * 128.f);
+                FillRectCol(S(px), S(y - 2), S(px + 2), S(y + 9), t.accentHot);
+            }
+        }
+        char b[16];
+        const int corr = g_mem ? int(g_mem->correlation * 99.f) : 0;
+        snprintf(b, sizeof(b), "COR%c%02d", corr < 0 ? '-' : '+', std::abs(corr));
+        DrawCellsTL(b, 572, 408, 3);
+    }
+
+    PaintCustomHeader("POLY / 10");
+    PaintCustomFooter(false);
+    PaintLayoutSwitchSweep();
+}
+
+// ---- composition: WARP, wide panorama terrain radar ------------------------
+// 82% panorama above, flat 18% console below: no side bay, the horizon runs
+// the full chassis width and the tallest near peak is auto-tracked.
+void PaintWarpLayout() {
+    const Theme& t = Th();
+    FillRectCol(0, 0, S(kLogicalW), S(kLogicalH), t.outer);
+    InsetPanel(16, 34, 624, 376);
+    gfx_push_clip(S(17), S(35), S(623), S(375));
+
+    const float pan = g_mem ? g_mem->pan : 0.f;
+    const int cx = 320 + int(pan * 8.f), horizonY = 168;
+    const double wClk = g_mem ? g_mem->warpClock : 0.0;
+    const float lvl = g_mem ? (g_mem->meter[0] + g_mem->meter[1]) * 0.5f : 0.f;
+    const float spark = g_mem ? g_mem->highSpark : 0.f;
+    const float imp = Impact();
+
+    // ---- upper half: 48 radar stars above the horizon ---------------------
+    for (int i = 0; i < 48; ++i) {
+        const float u = float(std::fmod(wClk * 0.14 + i / 48.0, 1.0));
+        const float ang = -3.14159265f * float((i * 37 % 100) / 100.f);
+        const float r1 = 6.f * std::pow(52.f, u);
+        const float tail = 0.05f + 0.14f * lvl;
+        const float r0 = r1 * (1.f - tail);
+        const GfxPoint p0 = ScenePoint(cx + r0 * cosf(ang), horizonY + r0 * sinf(ang));
+        const GfxPoint p1 = ScenePoint(cx + r1 * cosf(ang), horizonY + r1 * sinf(ang));
+        const COLORREF sc = (u > 0.78f && spark > 0.20f)
+                                ? t.accentHot : DepthInk(t.wave, 1.f - u);
+        GfxPoint seg[2] = { p0, p1 };
+        gfx_polyline(seg, 2, sc, S(1));
+    }
+
+    // azimuth scale across the full panorama
+    {
+        static const int ax5[5] = { 80, 200, 320, 440, 560 };
+        static const char* az5[5] = { "-60", "-30", "0", "+30", "+60" };
+        for (int i = 0; i < 5; ++i) {
+            FillRectCol(S(ax5[i]), S(horizonY - 5), S(ax5[i] + 1), S(horizonY), t.bar);
+            DrawCellsTL(az5[i], ax5[i] - 8, horizonY - 16, 2);
+        }
+    }
+
+    if (imp > 0.10f)
+        FillRectCol(S(18), S(horizonY), S(622), S(horizonY + 2), t.accentHot);
+    else
+        FillRectCol(S(18), S(horizonY), S(622), S(horizonY + 1), CustomFrameCol());
+
+    // ---- lower half: 16 x 24 terrain, wide and shallow --------------------
+    const float sub = g_mem && g_mem->warpLast >= 0.0
+                          ? float(std::clamp(g_mem->warpClock - g_mem->warpLast, 0.0, 0.999))
+                          : 0.f;
+    GfxPoint prev[24];
+    GfxPoint bestPt{ 0, 0 };
+    float bestVal = 0.f, bestX = 0.f, bestY = 0.f;
+    int bestCol = -1;
+    for (int r = 0; r < 16; ++r) {
+        const float u = (r + sub) / 16.f;
+        const float baseY = horizonY + 206.f * std::pow(u, 1.85f);
+        const float halfW = 72.f + 276.f * std::pow(u, 1.45f);
+        const float elev = 10.f + 74.f * std::pow(u, 1.35f);
+        const int rowIdx = g_mem ? (g_mem->warpHead - 1 - r + 16 * 4) % 16 : 0;
+        GfxPoint cur[24];
+        float vv[24];
+        for (int c = 0; c < 24; ++c) {
+            const float tx = -1.f + 2.f * c / 23.f;
+            const float v = g_mem ? g_mem->warpRows[rowIdx][c] / 255.f : 0.f;
+            vv[c] = v;
+            cur[c] = ScenePoint(cx + tx * halfW, baseY - elev * v);
+            if (r >= 13 && v > bestVal) {
+                bestVal = v;
+                bestCol = c;
+                bestPt = cur[c];
+                bestX = cx + tx * halfW;
+                bestY = baseY - elev * v;
+            }
+        }
+        GfxPoint poly[26];
+        for (int c = 0; c < 24; ++c) poly[c] = cur[c];
+        poly[24] = ScenePoint(cx + halfW, 376.f);
+        poly[25] = ScenePoint(cx - halfW, 376.f);
+        gfx_polygon(poly, 26, CustomPanelCol());
+        if (r > 0) {
+            for (int c = 0; c < 24; c += 2) {
+                GfxPoint seg[2] = { prev[c], cur[c] };
+                gfx_polyline(seg, 2, DepthInk(CustomFrameCol(), 1.f - u), S(1));
+            }
+        }
+        const COLORREF ridgeC = r >= 14 ? t.bar : DepthInk(t.wave, 1.f - u);
+        gfx_polyline(cur, 24, ridgeC, S(r == 15 ? 2 : 1));
+        if (r >= 10) {
+            for (int c = 0; c < 24; ++c) {
+                if (vv[c] <= 0.72f) continue;
+                FillRectCol(cur[c].x - S(1), cur[c].y - S(1),
+                            cur[c].x + S(2), cur[c].y + S(2), t.accentHot);
+            }
+        }
+        for (int c = 0; c < 24; ++c) prev[c] = cur[c];
+    }
+
+    // ---- tallest near peak: hollow lock + mast up to the azimuth scale ----
+    if (bestVal > 0.35f && bestCol >= 0) {
+        const int r = S(4);
+        FillRectCol(bestPt.x - r, bestPt.y - r, bestPt.x + r + S(1), bestPt.y - r + S(1), t.accentHot);
+        FillRectCol(bestPt.x - r, bestPt.y + r, bestPt.x + r + S(1), bestPt.y + r + S(1), t.accentHot);
+        FillRectCol(bestPt.x - r, bestPt.y - r, bestPt.x - r + S(1), bestPt.y + r + S(1), t.accentHot);
+        FillRectCol(bestPt.x + r, bestPt.y - r, bestPt.x + r + S(1), bestPt.y + r + S(1), t.accentHot);
+        FillRectCol(bestPt.x, S(horizonY - 26), bestPt.x + S(1), bestPt.y, t.accentHot);
+        char tag[16];
+        snprintf(tag, sizeof(tag), "PK:%s", kFreqLabel[bestCol * 8 / 24]);
+        DrawCellsTL(tag, std::clamp(int(bestX) - 16, 24, 556), horizonY - 38, 3);
+    }
+
+    PaintScopeGraticule(16, 34, 624, 376, false, true, false);
+    PaintSpecPlate(24, 42, "TERRAIN // WIDE");
+    gfx_pop_clip();
+
+    // ---- bottom console ---------------------------------------------------
+    InsetPanel(16, 384, 624, 446);
+    {
+        const bool trig = imp > 0.08f;
+        FillRectCol(S(26), S(392), S(32), S(398), CustomFrameCol());
+        FillRectCol(S(27), S(393), S(31), S(397), trig ? t.accentHot : t.seam);
+        DrawCellsTL("WARP // TER-11", 38, 390, 2);
+        char b[24];
+        const int corr = g_mem ? int(g_mem->correlation * 99.f) : 0;
+        const int panV = g_mem ? int(g_mem->pan * 99.f) : 0;
+        snprintf(b, sizeof(b), "COR%c%02d PAN%c%02d",
+                 corr < 0 ? '-' : '+', std::abs(corr),
+                 panV < 0 ? '-' : '+', std::abs(panV));
+        DrawCellsTL(b, 24, 412, 2);
+    }
+    for (int side = 0; side < 2; ++side) {
+        const int y = 392 + side * 18;
+        const float drive = g_mem ? g_mem->meter[side] : 0.f;
+        DrawCellsTL(side ? "R" : "L", 156, y, 2);
+        for (int i = 0; i < 36; ++i) {
+            const int x = 168 + i * 276 / 36;
+            const int x1 = 168 + (i + 1) * 276 / 36 - 1;
+            const bool lit = float(i) / 36.f < drive;
+            FillRectCol(S(x), S(y), S(x1), S(y + 6),
+                        lit ? (i > 31 ? t.accentHot : CustomStripCol())
+                            : LerpCol(t.seam, CustomPanelCol(), 0.35f));
+        }
+        if (g_mem && g_mem->meterPeak[side] > 0.02f) {
+            const int px = 168 + int(g_mem->meterPeak[side] * 276.f);
+            FillRectCol(S(px), S(y - 2), S(px + 2), S(y + 8), t.accentHot);
+        }
+        if (g_mem && g_mem->clipHold[side] > 0.f)
+            DrawCellsTL("CLIP", 452, y - 2, 3);
+    }
+    {
+        static const char* tag[3] = { "LO", "MD", "HI" };
+        const float e3[3] = { g_mem ? g_mem->lowSustain : 0.f,
+                              g_mem ? g_mem->midSustain : 0.f,
+                              g_mem ? g_mem->highSpark : 0.f };
+        for (int i = 0; i < 3; ++i) {
+            const int y = 392 + i * 14;
+            DrawCellsTL(tag[i], 486, y, 2);
+            FillRectCol(S(506), S(y + 2), S(602), S(y + 8), t.seam);
+            const int w = int(std::clamp(e3[i], 0.f, 1.f) * 96.f);
+            if (w > 0)
+                FillRectCol(S(506), S(y + 2), S(506 + w), S(y + 8),
+                            i == 0 ? t.bar : i == 1 ? t.wave : t.accentHot);
+        }
+        DrawCellsTL(PlaybackOrderWord(), 486, 432, 2);
+    }
+
+    PaintCustomHeader("WARP / 11");
+    PaintCustomFooter(false);
+    PaintLayoutSwitchSweep();
+}
+
+// ---- composition: MOIRE, blueprint interferometer + physical section ------
+// An unframed optical coordinate sheet fills the top; a drafting title block
+// sits in its lower-right corner; a 42px physical cross-section slot below
+// plots the real interference sum along the horizontal axis.
+void PaintMoireLayout() {
+    const Theme& t = Th();
+    FillRectCol(0, 0, S(kLogicalW), S(kLogicalH), t.outer);
+    InsetPanel(16, 34, 624, 398);
+    gfx_push_clip(S(17), S(35), S(623), S(397));
+
+    const float cx = 320.f, cy = 216.f;
+    const float m = g_mem ? float(g_mem->moireClock) : 0.f;
+    const float mL = g_mem ? g_mem->meter[0] : 0.f;
+    const float mR = g_mem ? g_mem->meter[1] : 0.f;
+    const float lowS = g_mem ? g_mem->lowSustain : 0.f;
+    const float midS = g_mem ? g_mem->midSustain : 0.f;
+    const float spark = g_mem ? g_mem->highSpark : 0.f;
+
+    // blueprint grid: a faint cross every 32px
+    {
+        const COLORREF gc = LerpCol(CustomPanelCol(), t.seam, 0.45f);
+        for (int gx = 24; gx < 616; gx += 32)
+            for (int gy = 42; gy < 392; gy += 32) {
+                FillRectCol(S(gx - 1), S(gy), S(gx + 2), S(gy + 1), gc);
+                FillRectCol(S(gx), S(gy - 1), S(gx + 1), S(gy + 2), gc);
+            }
+    }
+
+    const float rx = 72.f + 22.f * midS;
+    const float ry = 42.f + 14.f * midS;
+    float ox[3], oy[3], pitch[3];
+    COLORREF src[3];
+    ox[0] = cx + rx * cosf(m);
+    oy[0] = cy + ry * sinf(m * 1.3f);
+    pitch[0] = 9.0f + 5.5f * (1.f - mL);
+    src[0] = t.wave;
+    ox[1] = cx + rx * cosf(m + 2.0944f);
+    oy[1] = cy + ry * sinf(m * 1.3f + 1.5708f);
+    pitch[1] = 9.0f + 5.5f * (1.f - mR);
+    src[1] = t.bar;
+    ox[2] = cx + 34.f * sinf(m * 0.7f);
+    oy[2] = cy + 26.f * cosf(m * 0.5f);
+    pitch[2] = 14.0f + 6.0f * (1.f - lowS);
+    src[2] = LerpCol(CustomFrameCol(), CustomPanelCol(), 0.35f);
+
+    // hard 1px rings, faintest source first; LUT + radius-dependent segments
+    static const int order[3] = { 2, 0, 1 };
+    for (int oi = 0; oi < 3; ++oi) {
+        const int e = order[oi];
+        for (int k = 1; k <= 26; ++k) {
+            const float r = k * pitch[e];
+            if (r > 320.f) break;
+            COLORREF rc = src[e];
+            if (r > 220.f) rc = LerpCol(rc, CustomPanelCol(), 0.25f);
+            const int segs = r < 54.f ? 32 : 64;
+            const float* lc = r < 54.f ? kCircle32.c : kCircle64.c;
+            const float* ls = r < 54.f ? kCircle32.s : kCircle64.s;
+            GfxPoint ring[65];
+            for (int i = 0; i <= segs; ++i)
+                ring[i] = ScenePoint(ox[e] + r * lc[i], oy[e] + r * ls[i]);
+            gfx_polyline(ring, segs + 1, rc, S(1));
+        }
+    }
+
+    // a hit retriggers one expanding hard wavefront
+    if (g_mem && g_mem->moirePulse < 1.15f) {
+        const float pr = 14.f + g_mem->moirePulse * 270.f;
+        GfxPoint wave[65];
+        for (int i = 0; i <= 64; ++i)
+            wave[i] = ScenePoint(ox[2] + pr * kCircle64.c[i],
+                                 oy[2] + pr * kCircle64.s[i]);
+        gfx_polyline(wave, 65, DepthInk(t.accentHot, g_mem->moirePulse * 0.55f), S(1));
+    }
+
+    for (int e = 0; e < 3; ++e) {
+        const COLORREF cc = spark > 0.22f ? t.accentHot : CustomFrameCol();
+        GfxPoint h[2] = { ScenePoint(ox[e] - 5.f, oy[e]), ScenePoint(ox[e] + 6.f, oy[e]) };
+        GfxPoint v[2] = { ScenePoint(ox[e], oy[e] - 5.f), ScenePoint(ox[e], oy[e] + 6.f) };
+        gfx_polyline(h, 2, cc, S(1));
+        gfx_polyline(v, 2, cc, S(1));
+        FillRectCol(S(int(ox[e])), S(int(oy[e])), S(int(ox[e]) + 1), S(int(oy[e]) + 1), cc);
+    }
+
+    PaintScopeGraticule(16, 34, 624, 398, true, false, false);
+
+    // micrometer cursors: each source projected onto the four sheet edges
+    for (int e = 0; e < 3; ++e) {
+        const int sx = std::clamp(int(ox[e]), 26, 614);
+        FillRectCol(S(sx - 1), S(35), S(sx + 2), S(40), src[e]);
+        FillRectCol(S(sx - 1), S(391), S(sx + 2), S(396), src[e]);
+        const int sy = std::clamp(int(oy[e]), 44, 390);
+        FillRectCol(S(17), S(sy - 1), S(22), S(sy + 2), src[e]);
+        FillRectCol(S(618), S(sy - 1), S(623), S(sy + 2), src[e]);
+    }
+
+    // drafting title block
+    {
+        const int bl = 458, bt = 328, br = 618, bb = 392;
+        FillRectCol(S(bl), S(bt), S(br), S(bb), CustomPanelCol());
+        FillRectCol(S(bl), S(bt), S(br), S(bt + 1), CustomFrameCol());
+        FillRectCol(S(bl), S(bb - 1), S(br), S(bb), CustomFrameCol());
+        FillRectCol(S(bl), S(bt), S(bl + 1), S(bb), CustomFrameCol());
+        FillRectCol(S(br - 1), S(bt), S(br), S(bb), CustomFrameCol());
+        FillRectCol(S(bl + 2), S(bb - 26), S(br - 2), S(bb - 25), CustomFrameCol());
+        PaintSpecPlate(462, 331, "FIG.12 // INTERFERO");
+        char b[24];
+        snprintf(b, sizeof(b), "P-L:%02d P-R:%02d",
+                 int(pitch[0] * 10.f), int(pitch[1] * 10.f));
+        DrawCellsTL(b, 464, 352, 2);
+        const int corr = g_mem ? int(g_mem->correlation * 99.f) : 0;
+        snprintf(b, sizeof(b), "COR%c%02d", corr < 0 ? '-' : '+', std::abs(corr));
+        DrawCellsTL(b, 464, 370, 3);
+        const bool trig = Impact() > 0.08f;
+        FillRectCol(S(548), S(371), S(552), S(375), trig ? t.accentHot : t.seam);
+        DrawCellsTL("TRIG", 558, 370, trig ? 0 : 2);
+    }
+    gfx_pop_clip();
+
+    // ---- bottom: 42px physical cross-section slot -------------------------
+    InsetPanel(16, 404, 624, 446);
+    gfx_push_clip(S(17), S(405), S(623), S(445));
+    {
+        DrawCellsTL("CUT:Y0", 22, 420, 2);
+        FillRectCol(S(80), S(425), S(612), S(426),
+                    LerpCol(CustomFrameCol(), CustomPanelCol(), 0.55f));
+        GfxPoint sec[134];
+        float vv[134];
+        for (int i = 0; i < 134; ++i) {
+            const float px = 80.f + i * (532.f / 133.f);
+            const float d0 = std::hypot(px - ox[0], cy - oy[0]) / pitch[0];
+            const float d1 = std::hypot(px - ox[1], cy - oy[1]) / pitch[1];
+            const float d2 = std::hypot(px - ox[2], cy - oy[2]) / pitch[2];
+            const float val = (std::cos(6.283185307f * d0) +
+                               std::cos(6.283185307f * d1) +
+                               0.6f * std::cos(6.283185307f * d2)) / 2.6f;
+            vv[i] = val;
+            sec[i] = ScenePoint(px, 425.f - val * 14.f);
+        }
+        gfx_polyline(sec, 134, t.bar, S(1));
+        for (int i = 0; i < 134; ++i) {
+            if (vv[i] <= 0.78f) continue;
+            FillRectCol(sec[i].x - S(1), sec[i].y - S(1),
+                        sec[i].x + S(1), sec[i].y + S(1), t.accentHot);
+        }
+    }
+    gfx_pop_clip();
+
+    PaintCustomHeader("MOIRE / 12");
+    PaintCustomFooter(false);
+    PaintLayoutSwitchSweep();
+}
+
+// ---- composition: RASTER, data-brutalist test-pattern barcode -------------
+// Full width, no telemetry bay: three unequal horizontal bands (16-slot
+// barcode, symmetric 43-band knife matrix, 1px raster hairs) split by a
+// micron-thin telemetry gap. Nothing decorative survives.
+void PaintRasterLayout() {
+    const Theme& t = Th();
+    FillRectCol(0, 0, S(kLogicalW), S(kLogicalH), t.outer);
+    InsetPanel(16, 34, 624, 446);
+    gfx_push_clip(S(17), S(35), S(623), S(445));
+
+    const float imp = Impact();
+    const float spark = g_mem ? g_mem->highSpark : 0.f;
+    const float clk = g_mem ? float(g_mem->rasterClock) : 0.f;
+    const bool invFlash = imp > 0.24f;
+
+    // ---- upper band (y 40..144): 16 low/mid barcode slots -----------------
+    for (int k = 0; k < 16; ++k) {
+        const float lv = Lv(k);
+        const int sx = 24 + k * 37;
+        if (lv < 0.08f) {
+            FillRectCol(S(sx + 18), S(40), S(sx + 19), S(144), t.seam);
+            continue;
+        }
+        const int bw = std::max(1, int(lv * 34.f));
+        const int x0 = sx + 18 - bw / 2;
+        FillRectCol(S(x0), S(40), S(x0 + bw), S(144),
+                    lv > 0.72f ? t.accentHot : (k % 2 == 0 ? t.bar : t.ink));
+    }
+
+    // ---- data gap (y 150..166) -------------------------------------------
+    FillRectCol(S(24), S(150), S(616), S(151), CustomFrameCol());
+    FillRectCol(S(24), S(165), S(616), S(166), CustomFrameCol());
+    {
+        char b[32];
+        DrawCellsTL("TEST.PAT // 43B", 28, 154, 2);
+        const int lo = g_mem ? int(g_mem->lowSustain * 99.f) : 0;
+        const int md = g_mem ? int(g_mem->midSustain * 99.f) : 0;
+        const int hi = g_mem ? int(g_mem->highSpark * 99.f) : 0;
+        snprintf(b, sizeof(b), "LO:%02d MD:%02d HI:%02d", lo, md, hi);
+        DrawCellsTL(b, 168, 154, 3);
+        const int corr = g_mem ? int(g_mem->correlation * 99.f) : 0;
+        snprintf(b, sizeof(b), "COR%c%02d", corr < 0 ? '-' : '+', std::abs(corr));
+        DrawCellsTL(b, 320, 154, 2);
+        const int panV = g_mem ? int(g_mem->pan * 99.f) : 0;
+        snprintf(b, sizeof(b), "PAN%c%02d", panV < 0 ? '-' : '+', std::abs(panV));
+        DrawCellsTL(b, 384, 154, 2);
+        const int cenV = g_mem ? int(g_mem->centroid * 99.f) : 0;
+        snprintf(b, sizeof(b), "CEN:%02d", cenV);
+        DrawCellsTL(b, 448, 154, 2);
+        const bool trig = imp > 0.08f;
+        FillRectCol(S(536), S(155), S(540), S(159), trig ? t.accentHot : t.seam);
+        DrawCellsTL("TRIG", 546, 154, trig ? 0 : 2);
+    }
+
+    // ---- middle band (y 172..342): symmetric 43-band knife matrix ---------
+    if (invFlash)
+        FillRectCol(S(24), S(172), S(616), S(342),
+                    LerpCol(t.ink, CustomPanelCol(), 0.15f));
+    {
+        const int cy = 257;
+        for (int k = 0; k < 43; ++k) {
+            const float lv = Lv(k);
+            if (lv <= 0.12f) continue;
+            const int bw = std::max(1, int(lv * 12.f));
+            const int halfH = int(lv * 82.f);
+            const int x0 = 40 + k * 13;
+            const COLORREF c = invFlash
+                                   ? CustomPanelCol()
+                                   : (lv > 0.76f ? t.accentHot
+                                                 : (k % 3 == 0 ? t.wave : t.bar));
+            FillRectCol(S(x0), S(cy - halfH), S(x0 + bw), S(cy + halfH), c);
+        }
+        FillRectCol(S(24), S(cy), S(616), S(cy + 1),
+                    LerpCol(CustomFrameCol(), CustomPanelCol(), 0.30f));
+        const int needle = 40 + int(std::fmod(clk * 0.30f, 1.f) * 560.f);
+        FillRectCol(S(needle), S(172), S(needle + 1), S(342), t.accentHot);
+    }
+
+    // ---- lower band (y 348..438): 1px raster hairs ------------------------
+    {
+        for (int i = 0; i < 197; ++i) {
+            const int x = 24 + i * 3;
+            if (x > 616) break;
+            const int s = (i * 7) % 240;
+            const float w = (std::abs(g_state->spectrum.waveL[s]) +
+                             std::abs(g_state->spectrum.waveR[s])) * 0.5f / 64.f;
+            const float hiE = Lv(20 + (i % 23));
+            const int h = int(std::clamp(hiE * w, 0.f, 1.f) * 90.f);
+            if (h <= 0) continue;
+            const COLORREF c = (spark > 0.22f && i % 7 == 0)
+                                   ? t.accentHot
+                                   : ((i % 5 < 3) ? DepthInk(t.wave, 0.35f) : t.bar);
+            FillRectCol(S(x), S(438 - h), S(x + 1), S(438), c);
+        }
+    }
+
+    gfx_pop_clip();
+    PaintCustomHeader("RASTER / 13");
+    PaintCustomFooter(false);
+    PaintLayoutSwitchSweep();
+}
+
+// ---- composition: TORUS, classic round CRT vector terminal ----------------
+// The only non-rectangular chassis: one round green-screen scope, four thin
+// corner readouts floating in the surrounding void.
+void PaintTorusLayout() {
+    const Theme& t = Th();
+    FillRectCol(0, 0, S(kLogicalW), S(kLogicalH), t.outer);
+
+    const float cx = 320.f, cy = 240.f;
+    gfx_ellipse(S(int(cx - 186.f)), S(int(cy - 186.f)),
+                S(int(cx + 186.f) + 1), S(int(cy + 186.f) + 1), CustomPanelCol());
+    {
+        GfxPoint ring[65];
+        for (int i = 0; i <= 64; ++i)
+            ring[i] = ScenePoint(cx + 186.f * kCircle64.c[i], cy + 186.f * kCircle64.s[i]);
+        gfx_polyline(ring, 65, CustomFrameCol(), S(2));
+        for (int i = 0; i <= 64; ++i)
+            ring[i] = ScenePoint(cx + 180.f * kCircle64.c[i], cy + 180.f * kCircle64.s[i]);
+        gfx_polyline(ring, 65, DepthInk(CustomFrameCol(), 0.45f), S(1));
+    }
+
+    // 360-degree bezel scale, crosshair and one faint inner reference circle
+    {
+        const COLORREF tickC = LerpCol(CustomFrameCol(), CustomPanelCol(), 0.45f);
+        for (int deg = 0; deg < 360; deg += 10) {
+            const float a = 6.283185307f * deg / 360.f;
+            const float r0 = (deg % 30 == 0) ? 168.f : 174.f;
+            GfxPoint seg[2] = { ScenePoint(cx + r0 * cosf(a), cy + r0 * sinf(a)),
+                                ScenePoint(cx + 180.f * cosf(a), cy + 180.f * sinf(a)) };
+            gfx_polyline(seg, 2, tickC, S(1));
+        }
+        const COLORREF axc = LerpCol(CustomFrameCol(), CustomPanelCol(), 0.62f);
+        FillRectCol(S(int(cx) - 166), S(int(cy)), S(int(cx) - 8), S(int(cy) + 1), axc);
+        FillRectCol(S(int(cx) + 8), S(int(cy)), S(int(cx) + 166), S(int(cy) + 1), axc);
+        FillRectCol(S(int(cx)), S(int(cy) - 166), S(int(cx) + 1), S(int(cy) - 8), axc);
+        FillRectCol(S(int(cx)), S(int(cy) + 8), S(int(cx) + 1), S(int(cy) + 166), axc);
+        GfxPoint ic[65];
+        for (int i = 0; i <= 64; ++i)
+            ic[i] = ScenePoint(cx + 92.f * kCircle64.c[i], cy + 92.f * kCircle64.s[i]);
+        gfx_polyline(ic, 65, DepthInk(t.seam, 0.45f), S(1));
+    }
+
+    const float clk = g_mem ? float(g_mem->torusClock) : 0.f;
+    const float lowS = g_mem ? g_mem->lowSustain : 0.f;
+    const float midS = g_mem ? g_mem->midSustain : 0.f;
+    const float pan = g_mem ? g_mem->pan : 0.f;
+    const float imp = Impact();
+
+    const float ax = clk * 0.72f, ay = clk * 1.05f, az = clk * 0.31f;
+    const float R = 1.25f + 0.25f * lowS + 0.18f * imp;
+    const float rBase = 0.48f + 0.18f * midS;
+    const float fov = 345.f, camZ = 4.25f - 0.14f * imp;
+    const float cax = cosf(ax), sax = sinf(ax);
+    const float cay = cosf(ay), say = sinf(ay);
+    const float caz = cosf(az), saz = sinf(az);
+
+    auto project = [&](float x0, float y0, float z0,
+                       float& ox, float& oy, float& oz) {
+        const float y1 = y0 * cax - z0 * sax;
+        const float z1 = y0 * sax + z0 * cax;
+        const float x2 = x0 * cay + z1 * say;
+        const float z2 = -x0 * say + z1 * cay;
+        const float x3 = x2 * caz - y1 * saz;
+        const float y3 = x2 * saz + y1 * caz;
+        const float d = fov / (camZ - z2);
+        ox = cx + x3 * d;
+        oy = cy - y3 * d;
+        oz = z2;
+    };
+    // nothing may leave the round glass: pull stray points back to r=172
+    auto onGlass = [&](float& x, float& y) {
+        const float dx = x - cx, dy = y - cy;
+        const float d = std::sqrt(dx * dx + dy * dy);
+        if (d > 172.f) {
+            const float k = 172.f / d;
+            x = cx + dx * k;
+            y = cy + dy * k;
+        }
+    };
+
+    struct Node { float x, y, z, lv; };
+    Node nodes[96], rings[12][8];
+    int nn = 0;
+    float hotX = 0.f, hotY = 0.f, hotLv = 0.f;
+    for (int uIdx = 0; uIdx < 12; ++uIdx) {
+        const float u = 6.283185307f * uIdx / 12.f;
+        for (int vIdx = 0; vIdx < 8; ++vIdx) {
+            const float v = 6.283185307f * vIdx / 8.f + u * pan * 0.5f;
+            const float lv = Lv((uIdx * 3 + vIdx) % 43);
+            const float r = rBase * (1.f + 0.55f * lv);
+            const float rr = R + r * cosf(v);
+            const float x0 = rr * cosf(u), y0 = rr * sinf(u), z0 = r * sinf(v);
+            Node n{};
+            project(x0, y0, z0, n.x, n.y, n.z);
+            n.lv = lv;
+            onGlass(n.x, n.y);
+            nodes[nn++] = n;
+            rings[uIdx][vIdx] = n;
+            if (lv > hotLv) { hotLv = lv; hotX = n.x; hotY = n.y; }
+        }
+    }
+
+    // gimbal axes
+    {
+        const float A = 1.75f;
+        const float ends[6][3] = { { A, 0, 0 }, { -A, 0, 0 },
+                                   { 0, A, 0 }, { 0, -A, 0 },
+                                   { 0, 0, A }, { 0, 0, -A } };
+        GfxPoint gp2[6];
+        for (int i = 0; i < 6; ++i) {
+            float px = 0.f, py = 0.f, pz = 0.f;
+            project(ends[i][0], ends[i][1], ends[i][2], px, py, pz);
+            onGlass(px, py);
+            gp2[i] = ScenePoint(px, py);
+        }
+        for (int a = 0; a < 3; ++a) {
+            GfxPoint seg[2] = { gp2[a * 2], gp2[a * 2 + 1] };
+            gfx_polyline(seg, 2, DepthInk(CustomFrameCol(), 0.42f), S(1));
+        }
+    }
+
+    // meridian skeleton, then the depth-sorted hard nodes
+    for (int uIdx = 0; uIdx < 12; ++uIdx) {
+        GfxPoint ring[9];
+        for (int vIdx = 0; vIdx < 8; ++vIdx)
+            ring[vIdx] = ScenePoint(rings[uIdx][vIdx].x, rings[uIdx][vIdx].y);
+        ring[8] = ring[0];
+        gfx_polyline(ring, 9, DepthInk(t.seam, 0.45f), S(1));
+    }
+
+    std::sort(nodes, nodes + nn, [](const Node& a, const Node& b) { return a.z < b.z; });
+    for (int i = 0; i < nn; ++i) {
+        const Node& n = nodes[i];
+        const float zNorm = std::clamp((n.z + 2.0f) / 4.0f, 0.f, 1.f);
+        const int sz = 2 + int(zNorm * 2.5f) + (n.lv > 0.72f ? 1 : 0);
+        const COLORREF c = n.lv > 0.75f
+                               ? t.accentHot
+                               : (zNorm > 0.55f
+                                      ? DepthInk(t.bar, (1.f - zNorm) * 0.4f)
+                                      : DepthInk(t.wave, (1.f - zNorm) * 0.7f));
+        const int px = int(n.x), py = int(n.y), h = sz / 2;
+        FillRectCol(S(px - h), S(py - h), S(px - h + sz), S(py - h + sz), c);
+        if (zNorm > 0.75f && sz >= 4)
+            FillRectCol(S(px), S(py), S(px + 1), S(py + 1), t.accentHot);
+    }
+
+    // hottest node locked in a 7x7 frame
+    if (hotLv > 0.25f) {
+        const int hx = S(int(hotX)), hy = S(int(hotY)), r = S(3);
+        FillRectCol(hx - r, hy - r, hx + r + S(1), hy - r + S(1), t.accentHot);
+        FillRectCol(hx - r, hy + r, hx + r + S(1), hy + r + S(1), t.accentHot);
+        FillRectCol(hx - r, hy - r, hx - r + S(1), hy + r + S(1), t.accentHot);
+        FillRectCol(hx + r, hy - r, hx + r + S(1), hy + r + S(1), t.accentHot);
+    }
+
+    // ---- four corner readouts in the surrounding void ---------------------
+    PaintSpecPlate(18, 40, "CRT-14 // TORUS", imp > 0.18f);
+    {
+        const bool trig = imp > 0.08f;
+        FillRectCol(S(22), S(60), S(28), S(66), CustomFrameCol());
+        FillRectCol(S(23), S(61), S(27), S(65), trig ? t.accentHot : t.seam);
+        DrawCellsTL("TRIG", 34, 58, trig ? 0 : 2);
+    }
+    {
+        char b[16];
+        snprintf(b, sizeof(b), "AX:%03d", int(std::fmod(double(ax) * 57.2958, 360.0)));
+        DrawCellsTL(b, 512, 42, 2);
+        snprintf(b, sizeof(b), "AY:%03d", int(std::fmod(double(ay) * 57.2958, 360.0)));
+        DrawCellsTL(b, 512, 56, 2);
+    }
+    for (int side = 0; side < 2; ++side) {
+        const int x = 22 + side * 12;
+        const float drive = g_mem ? g_mem->meter[side] : 0.f;
+        const int n = int(std::clamp(drive, 0.f, 1.f) * 96.f);
+        FillRectCol(S(x), S(436 - 96), S(x + 7), S(436),
+                    LerpCol(CustomPanelCol(), t.seam, 0.35f));
+        if (n > 0) FillRectCol(S(x), S(436 - n), S(x + 7), S(436),
+                               side ? t.wave : t.bar);
+        if (g_mem && g_mem->meterPeak[side] > 0.02f) {
+            const int py = 436 - int(g_mem->meterPeak[side] * 96.f);
+            FillRectCol(S(x), S(py - 1), S(x + 7), S(py), t.accentHot);
+        }
+        DrawCellsTL(side ? "R" : "L", x, 326, 2);
+    }
+    {
+        char b[16];
+        const int corr = g_mem ? int(g_mem->correlation * 99.f) : 0;
+        snprintf(b, sizeof(b), "COR%c%02d", corr < 0 ? '-' : '+', std::abs(corr));
+        DrawCellsTL(b, 524, 376, 3);
+        const int panV = g_mem ? int(g_mem->pan * 99.f) : 0;
+        snprintf(b, sizeof(b), "PAN%c%02d", panV < 0 ? '-' : '+', std::abs(panV));
+        DrawCellsTL(b, 524, 392, 3);
+        const int cenV = g_mem ? int(g_mem->centroid * 99.f) : 0;
+        snprintf(b, sizeof(b), "CEN:%02d", cenV);
+        DrawCellsTL(b, 524, 408, 2);
+        DrawCellsTL(PlaybackOrderWord(), 524, 424, 2);
+    }
+
+    PaintCustomHeader("TORUS / 14");
+    PaintCustomFooter(false);
+    PaintLayoutSwitchSweep();
+}
+
 
 // ---- channel rail ---------------------------------------------------------
 // The page rail stays visible while the user is around and fades out after
@@ -2522,8 +3609,12 @@ void sceneRender(const SceneState& s, float scale, const stage::Memory& memory,
         if (layoutMode == layout::Dive) { PaintDiveLayout(); return; }
         if (layoutMode == layout::Sono) { PaintSonoLayout(); return; }
         if (layoutMode == layout::Track) { PaintTrackLayout(); return; }
-        if (layoutMode == layout::Sonar) { PaintSonarLayout(); return; }
         if (layoutMode == layout::Deck) { PaintDeckLayout(); return; }
+        if (layoutMode == layout::Poly) { PaintPolyLayout(); return; }
+        if (layoutMode == layout::Warp) { PaintWarpLayout(); return; }
+        if (layoutMode == layout::Moire) { PaintMoireLayout(); return; }
+        if (layoutMode == layout::Raster) { PaintRasterLayout(); return; }
+        if (layoutMode == layout::Torus) { PaintTorusLayout(); return; }
     }
 
     const int mode = s.stageMode;

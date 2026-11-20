@@ -22,7 +22,11 @@ enum Mode : int {
     Sono,         // SDR-style spectrogram waterfall
     Track,        // PC-98 / FastTracker II 8-channel hex pattern scroll
     Deck,         // cassette / DAT deck: linked reels + VFD 7-segment clock
-    Sonar,
+    Poly,         // 3D wireframe icosahedron core + counter-rotating octahedron
+    Warp,         // warp starfield over a perspective spectrum ridgeline field
+    Moire,        // three-source hard-edge moire interference rings
+    Raster,       // Amiga/DOS copper-bar raster wave
+    Torus,        // 3D vector-pixel torus (vector balls)
     Count
 };
 
